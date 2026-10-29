@@ -3268,6 +3268,7 @@ do
     local preferUpgrade = false
     local paused = false
     local pending
+    local upgradeTargetId
 
     local bindings = {}
     local geometryCache = {}
@@ -3520,34 +3521,94 @@ do
     end
 
     local function upgradeAction(config, records, money)
+        -- Helper ใหม่: อ่านขั้นอัปเกรดจากโครงสร้าง Config เดิม
+        local function inspect(id)
+            local record = records[id]
+
+            if not owned(record) then
+                return nil, "Removed"
+            end
+
+            if type(record.Name) ~= "string" then
+                return nil, "Waiting"
+            end
+
+            local definition = config.Towers[record.Name]
+            local tiers = type(definition) == "table"
+                and definition.Upgrades
+            local level = record.Level or 1
+
+            if type(tiers) ~= "table"
+                or not finite(level)
+                or level < 1
+                or level % 1 ~= 0 then
+                return nil, "Waiting"
+            end
+
+            local nextTier = tiers[level + 1]
+
+            -- ใช้การตรวจขั้นถัดไปตาม Config แบบเดียวกับโค้ดเดิม
+            if nextTier == nil then
+                return nil, "Max"
+            end
+
+            local price = type(nextTier) == "table"
+                and nextTier.Price
+
+            if not finite(price) or price < 0 then
+                return nil, "Waiting"
+            end
+
+            return {
+                kind = "Upgrade",
+                id = id,
+                name = record.Name,
+                level = level + 1,
+                price = price,
+            }, "Ready"
+        end
+
+        if upgradeTargetId then
+            local action, reason = inspect(upgradeTargetId)
+
+            if action then
+                -- คืนเป้าหมายเดิมแม้เงินยังไม่พอ
+                -- evaluate() ตรวจเงินก่อนส่ง Remote อยู่แล้ว
+                return action
+            end
+
+            if reason == "Waiting" then
+                -- ข้อมูลยังไม่พร้อม ไม่ย้ายไปอัปตัวอื่น
+                return nil
+            end
+
+            -- ตัวเดิมตัน ถูกขาย หรือไม่ใช่ของเราแล้ว
+            upgradeTargetId = nil
+        end
+
         local best
 
-        for id, record in pairs(records) do
-            if type(id) == "string" and owned(record) then
-                local definition = config.Towers[record.Name]
-                local tiers = type(definition) == "table"
-                    and definition.Upgrades
-                local level = record.Level or 1
+        for id in pairs(records) do
+            if type(id) == "string" then
+                local action = inspect(id)
 
-                if type(tiers) == "table" and finite(level)
-                    and level >= 1 and level % 1 == 0 then
-                    local nextTier = tiers[level + 1]
-                    local price = type(nextTier) == "table"
-                        and nextTier.Price
-
-                    if finite(price) and price >= 0 and price <= money
-                        and (not best or price < best.price
-                            or (price == best.price and id < best.id)) then
-                        best = {
-                            kind = "Upgrade",
-                            id = id,
-                            name = record.Name,
-                            level = level + 1,
-                            price = price,
-                        }
-                    end
+                -- เลือกตัวแรกจากราคาขั้นถัดไปที่ถูกที่สุด
+                -- จากนั้นจะล็อกตัวนี้จนตัน
+                if action and (
+                    not best
+                    or action.price < best.price
+                    or (
+                        action.price == best.price
+                        and action.id < best.id
+                    )
+                ) then
+                    best = action
                 end
             end
+        end
+
+        if best then
+            upgradeTargetId = best.id
         end
 
         return best
@@ -3840,19 +3901,27 @@ do
 
         local action
 
-        if autoUpgrade and upgrade
-            and (preferUpgrade or not autoPlace) then
+        if autoUpgrade then
+            -- รอ Remote ก่อน ไม่ใช้เงินไปวางแทรก
+            if not upgrade then
+                show("รอโหลด TowerUpgrade")
+                return
+            end
+
             action = upgradeAction(config, records, money.Value)
+
+            if not action and upgradeTargetId then
+                show("รอข้อมูลยูนิตที่กำลังอัปเกรด")
+                return
+            end
         end
 
+        -- วางเพิ่มเมื่อไม่มีเป้าหมายที่ต้องอัปแล้ว
+        -- หรือเมื่อปิด Auto Upgrade
         if not action and autoPlace and add then
             action = placementAction(
                 root, models, config, modules, records, money.Value
             )
-        end
-
-        if not action and autoUpgrade and upgrade then
-            action = upgradeAction(config, records, money.Value)
         end
 
         if not action then
@@ -3910,6 +3979,7 @@ do
         workspace:GetAttributeChangedSignal("GameState"):Connect(function()
             if workspace:GetAttribute("GameState") == "Restarting" then
                 pending = nil
+                upgradeTargetId = nil
                 paused = false
                 preferUpgrade = false
                 routeCache = nil
@@ -3919,6 +3989,7 @@ do
 
     MacUI:OnUnload(function()
         alive = false
+        upgradeTargetId = nil
         restartConnection:Disconnect()
 
         for _, binding in pairs(bindings) do
