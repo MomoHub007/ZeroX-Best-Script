@@ -1,9 +1,8 @@
---[[
-    Zero X — reusable UI base
-    Based on the supplied MacUI demo (MacUI by Kiwzu).
-    Original Dark / Blue appearance retained; demo pages and tasks removed.
-    Run in the same client environment as the original HttpGet/loadstring script.
-]]
+if not game:IsLoaded() then
+    repeat
+        game.Loaded:Wait()
+    until game:IsLoaded()
+end
 
 local BASE = (getgenv and getgenv().MacUIBase) or "https://raw.githubusercontent.com/Kiwzu/Mac-OS-UI-LUA/refs/heads/main/"
 
