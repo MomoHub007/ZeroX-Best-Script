@@ -4,10 +4,8 @@ if not game:IsLoaded() then
     until game:IsLoaded()
 end
 
-
 local print = function() end
 local warn = function() end
-
 
 local BASE = (getgenv and getgenv().MacUIBase) or "https://raw.githubusercontent.com/Kiwzu/Mac-OS-UI-LUA/refs/heads/main/"
 
@@ -3273,6 +3271,9 @@ do
     local bindings = {}
     local geometryCache = {}
     local rejectedPositions = {}
+    local MAX_PLACE_TIMEOUTS = 5
+    local placeTimeouts = 0
+    local unresolvedPlacements = {}
     local routeCache
 
     local placeSection = Tabs.AutoPlay:AddSection({
@@ -3303,8 +3304,15 @@ do
         end,
     })
 
-    local function show(_message)
-        -- ปิดการแสดงสถานะแล้ว
+    local lastDebugMessage
+
+    local function show(message)
+        if not alive or lastDebugMessage == message then
+            return
+        end
+
+        lastDebugMessage = message
+        warn("[Zero X / Auto Play]", message)
     end
 
     local function finite(value)
@@ -3484,17 +3492,21 @@ do
 
     local function geometry(name, definition)
         local template = definition.Model
-        if typeof(template) ~= "Instance"
-            or not template:IsA("Model") then
+        if typeof(template) ~= "Instance" or not template:IsA("Model") then
+            return nil
+        end
+
+        local primary = template.PrimaryPart
+        if not primary or not primary:IsDescendantOf(template) then
             return nil
         end
 
         local cached = geometryCache[name]
-
-        if cached and cached.template == template then
+        if cached and cached.template == template and cached.primary == primary then
             return cached
         end
 
+        local templatePivot = template:GetPivot()
         local boxCF, boxSize = template:GetBoundingBox()
         local size = definition.HitboxSize
 
@@ -3508,9 +3520,16 @@ do
 
         cached = {
             template = template,
+            primary = primary,
             size = size,
+            -- เพิ่มใหม่: กรอบ Native เทียบกับ Pivot ของโมเดล
+            primaryRelative = templatePivot:ToObjectSpace(
+                primary.CFrame
+            ),
+            boxRelative = templatePivot:ToObjectSpace(boxCF),
+            boxSize = boxSize,
             offset = math.max(
-                template:GetPivot().Position.Y
+                templatePivot.Position.Y
                     - (boxCF.Position.Y - boxSize.Y / 2),
                 0
             ),
@@ -3518,6 +3537,94 @@ do
 
         geometryCache[name] = cached
         return cached
+    end
+
+    local function placementSpaceClear(pivot, info, overlap, models)
+        if not models or not models.Parent then
+            return false
+        end
+
+        overlap.CollisionGroup = "Default"
+        overlap.RespectCanCollide = false
+        overlap.MaxParts = 0
+
+        local nativeBoxCF = pivot * info.primaryRelative
+        local modelBoxCF = pivot * info.boxRelative
+
+        -- รักษาการตรวจเดิมทั้งสามกรอบ
+        if #workspace:GetPartBoundsInBox(
+            nativeBoxCF, info.size, overlap
+        ) > 0 then
+            return false
+        end
+
+        if #workspace:GetPartBoundsInBox(
+            pivot, info.size, overlap
+        ) > 0 then
+            return false
+        end
+
+        if #workspace:GetPartBoundsInBox(
+            modelBoxCF, info.boxSize, overlap
+        ) > 0 then
+            return false
+        end
+
+        -- Helper ใหม่: ฉายกล่องที่มีมุมลงบน XZ
+        -- ใช้ทุกแกนของ CFrame จึงรองรับกล่องที่หมุนหรือเอียง
+        local function footprint(cf, size)
+            local half = size / 2
+            local right = cf.RightVector
+            local up = cf.UpVector
+            local look = cf.LookVector
+
+            local extentX = math.abs(right.X) * half.X
+                + math.abs(up.X) * half.Y
+                + math.abs(look.X) * half.Z
+
+            local extentZ = math.abs(right.Z) * half.X
+                + math.abs(up.Z) * half.Y
+                + math.abs(look.Z) * half.Z
+
+            return cf.Position.X - extentX,
+                cf.Position.X + extentX,
+                cf.Position.Z - extentZ,
+                cf.Position.Z + extentZ
+        end
+
+        -- รวม footprint ของโมเดลและ Native hitbox
+        local minX, maxX, minZ, maxZ = footprint(
+            modelBoxCF, info.boxSize
+        )
+
+        local hitMinX, hitMaxX, hitMinZ, hitMaxZ = footprint(
+            nativeBoxCF, info.size
+        )
+
+        minX = math.min(minX, hitMinX)
+        maxX = math.max(maxX, hitMaxX)
+        minZ = math.min(minZ, hitMinZ)
+        maxZ = math.max(maxZ, hitMaxZ)
+
+        -- อ่านโมเดลที่อยู่จริง ไม่กรองเฉพาะเจ้าของเรา
+        -- ไม่ใช้ GetDescendants และไม่สร้าง Instance
+        for _, tower in ipairs(models:GetChildren()) do
+            if tower:IsA("Model")
+                and tower.Parent == models
+                and tower:FindFirstChildWhichIsA("BasePart", true) then
+
+                local towerCF, towerSize = tower:GetBoundingBox()
+                local otherMinX, otherMaxX, otherMinZ, otherMaxZ =
+                    footprint(towerCF, towerSize)
+
+                if minX <= otherMaxX and maxX >= otherMinX
+                    and minZ <= otherMaxZ and maxZ >= otherMinZ then
+                    return false
+                end
+            end
+        end
+
+        return true
     end
 
     local function farmBase(definition)
@@ -3853,9 +3960,9 @@ do
                     hit.Position + Vector3.new(0, action.info.offset, 0)
                 )
 
-                if #workspace:GetPartBoundsInBox(
-                    pivot, action.info.size, overlap
-                ) == 0 then
+                if placementSpaceClear(
+                    pivot, action.info, overlap, models
+                ) then
                     action.pivot = pivot
                     return action
                 end
@@ -4142,9 +4249,9 @@ do
                         hit.Position + Vector3.new(0, action.info.offset, 0)
                     )
 
-                    if #workspace:GetPartBoundsInBox(
-                        pivot, action.info.size, overlap
-                    ) == 0 then
+                    if placementSpaceClear(
+                        pivot, action.info, overlap, models
+                    ) then
                         action.pivot = pivot
                         return action
                     end
@@ -4156,6 +4263,81 @@ do
         end
 
         return nil
+    end
+
+    local function debugPlacement(action, models, records, money)
+        local params = OverlapParams.new()
+        params.FilterType = Enum.RaycastFilterType.Include
+        params.FilterDescendantsInstances = { models }
+
+        local boxCF = action.pivot * action.info.boxRelative
+        local pivotHits = workspace:GetPartBoundsInBox(
+            action.pivot, action.info.size, params
+        )
+        local modelHits = workspace:GetPartBoundsInBox(
+            boxCF, action.info.boxSize, params
+        )
+
+        params.CollisionGroup = "Default"
+        params.RespectCanCollide = false
+
+        local nativeBoxCF = action.pivot * action.info.primaryRelative
+        local nativeHits = workspace:GetPartBoundsInBox(
+            nativeBoxCF, action.info.size, params
+        )
+
+        warn(
+            "[Zero X / Placement Probe v2]",
+            "JobId:", game.JobId,
+            "Name:", action.name,
+            "NativeBox:", nativeBoxCF,
+            "NativeSize:", action.info.size,
+            "NativeHits:", #nativeHits
+        )
+
+        local sameName = 0
+
+        for _, record in pairs(records) do
+            if owned(record) and record.Name == action.name then
+                sameName += 1
+            end
+        end
+
+        warn(
+            "[Zero X / Placement Probe v1]",
+            "JobId:", game.JobId,
+            "Name:", action.name,
+            "UnitId:", action.unitId,
+            "MoneyBefore:", money,
+            "Price:", action.price,
+            "OwnedSameName:", sameName,
+            "Pivot:", action.pivot,
+            "QuerySize:", action.info.size,
+            "ModelBox:", boxCF,
+            "ModelBoxSize:", action.info.boxSize,
+            "PivotHits:", #pivotHits,
+            "ModelHits:", #modelHits,
+            "Filter:", models:GetFullName()
+        )
+
+        local seen = {}
+        local shown = 0
+
+        for _, list in ipairs({ pivotHits, modelHits, nativeHits }) do
+            for _, part in ipairs(list) do
+                if not seen[part] and shown < 8 then
+                    seen[part] = true
+                    shown += 1
+
+                    warn(
+                        "[Zero X / Placement Probe Part]",
+                        part:GetFullName(),
+                        "CanQuery:", part.CanQuery,
+                        "CanCollide:", part.CanCollide
+                    )
+                end
+            end
+        end
     end
 
     local function evaluate()
@@ -4215,6 +4397,31 @@ do
         local add = remote("TowerAdd", onPlaced)
         local upgrade = remote("TowerUpgrade", onUpgraded)
 
+        -- ตรวจผลคำขอเก่าที่อาจมาช้า ก่อนทำรายการอื่น
+        for _, old in ipairs(unresolvedPlacements) do
+            for id, record in pairs(records) do
+                if type(id) == "string"
+                    and not old.before[id]
+                    and owned(record)
+                    and record.Name == old.name
+                    and record.UnitId == old.unitId
+                    and typeof(record.Pos) == "Vector3"
+                    and (record.Pos - old.position).Magnitude <= 0.5 then
+
+                    paused = true
+
+                    warn(
+                        "[Zero X / Auto Play]",
+                        "พบผลวางที่มาช้าจากคำขอเก่า หยุดตรวจสอบ",
+                        old.name,
+                        "Id:", id,
+                        "Position:", record.Pos
+                    )
+                    return
+                end
+            end
+        end
+
         if pending then
             local confirmed = false
 
@@ -4251,10 +4458,13 @@ do
                     confirmed = true
                 end
 
-            elseif pending.kind == "Upgrade" and pending.acknowledged then
+            elseif pending.kind == "Upgrade" then
                 local record = records[pending.id]
 
+                -- ยืนยันระดับจริงจาก replicated record
+                -- ไม่บังคับว่าต้องจับ Event ได้ก่อน
                 confirmed = owned(record)
+                    and record.Name == pending.name
                     and finite(record.Level)
                     and record.Level >= pending.level
             end
@@ -4263,11 +4473,125 @@ do
                 show("ยืนยันสำเร็จ: " .. pending.name)
                 pending = nil
 
-            elseif os.clock() - pending.sentAt >= 12 then
+            elseif os.clock() - pending.sentAt >= 3 then
+                if pending.kind == "Place" then
+                    local uncertain = pending.acknowledged ~= nil
+
+                    -- ถ้ามี record ใหม่ของยูนิตนี้แล้ว แต่จับคู่ไม่ได้
+                    -- หยุดตรวจสอบแทนการส่งวางเพิ่ม
+                    for id, record in pairs(records) do
+                        if not pending.before[id]
+                            and owned(record)
+                            and record.Name == pending.name
+                            and record.UnitId == pending.unitId then
+                            uncertain = true
+                            break
+                        end
+                    end
+
+                    if not uncertain
+                        and type(pending.key) == "string" then
+
+                        placeTimeouts += 1
+
+                        -- ไม่กลับไปส่งจุดเดิมในรอบนี้
+                        rejectedPositions[pending.key] = math.huge
+
+                        table.insert(unresolvedPlacements, {
+                            name = pending.name,
+                            unitId = pending.unitId,
+                            position = pending.position,
+                            before = pending.before,
+                        })
+
+                        warn(
+                            "[Zero X / Auto Play]",
+                            "ไม่พบผลวาง:",
+                            pending.name,
+                            "ข้ามจุด:", pending.position,
+                            "Timeout:", placeTimeouts,
+                            "/", MAX_PLACE_TIMEOUTS
+                        )
+
+                        if placeTimeouts < MAX_PLACE_TIMEOUTS then
+                            pending = nil
+                            show("ข้ามจุดเดิม เตรียมหาจุดวางใหม่")
+                            return
+                        end
+                    end
+                end
+
                 paused = true
                 show("หมดเวลายืนยัน หยุดโดยไม่ส่งคำขอซ้ำ")
                 warn("[Zero X / Auto Play]", "Acknowledgement timeout",
                     pending.kind, pending.name)
+
+                warn(
+                    "[Zero X / Auto Play / Debug]",
+                    "PlaceEnabled:", autoPlace,
+                    "UpgradeEnabled:", autoUpgrade,
+                    "Wave:", workspace:GetAttribute("Wave"),
+                    "Phase:", workspace:GetAttribute("GameState"),
+                    "Money:", money.Value,
+                    "Kind:", pending.kind,
+                    "Name:", pending.name,
+                    "Id:", pending.id,
+                    "UnitId:", pending.unitId,
+                    "RequestedPosition:", pending.position,
+                    "RequestedLevel:", pending.level,
+                    "Acknowledged:", pending.acknowledged
+                )
+
+                if pending.kind == "Upgrade" then
+                    local record = records[pending.id]
+
+                    warn(
+                        "[Zero X / Auto Play / Upgrade Record]",
+                        "Exists:", type(record) == "table",
+                        "Owned:", owned(record),
+                        "Name:", type(record) == "table" and record.Name,
+                        "Level:", type(record) == "table" and record.Level
+                    )
+                elseif pending.kind == "Place" then
+                    local shown = 0
+                    local total = 0
+
+                    for id, record in pairs(records) do
+                        if not pending.before[id]
+                            and owned(record)
+                            and record.Name == pending.name then
+                            total += 1
+
+                            if shown < 5 then
+                                shown += 1
+
+                                local position = record.Pos
+                                local distance
+
+                                if typeof(position) == "Vector3" then
+                                    distance = (
+                                        position - pending.position
+                                    ).Magnitude
+                                end
+
+                                warn(
+                                    "[Zero X / Auto Play / New Record]",
+                                    "Id:", id,
+                                    "UnitId:", record.UnitId,
+                                    "UnitMatches:",
+                                        record.UnitId == pending.unitId,
+                                    "Position:", position,
+                                    "Distance:", distance
+                                )
+                            end
+                        end
+                    end
+
+                    warn(
+                        "[Zero X / Auto Play / Debug]",
+                        "New owned records with same name:", total
+                    )
+                end
             else
                 show("รอยืนยัน: " .. pending.name)
             end
@@ -4341,6 +4665,8 @@ do
             pending = action
             preferUpgrade = true
 
+            debugPlacement(action, models, records, money.Value)
+
             show("ส่งวาง: " .. action.name)
             add:FireServer({
                 Name = action.name,
@@ -4366,6 +4692,8 @@ do
             if workspace:GetAttribute("GameState") == "Restarting" then
                 pending = nil
                 upgradeTargetId = nil
+                placeTimeouts = 0
+                table.clear(unresolvedPlacements)
                 paused = false
                 preferUpgrade = false
                 routeCache = nil
@@ -4376,6 +4704,7 @@ do
     MacUI:OnUnload(function()
         alive = false
         upgradeTargetId = nil
+        table.clear(unresolvedPlacements)
         restartConnection:Disconnect()
 
         for _, binding in pairs(bindings) do
