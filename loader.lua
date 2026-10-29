@@ -1,5 +1,8 @@
--- เพิ่มเกมใหม่ในตารางนี้:
--- [GameId] = "Raw URL",
+if not game:IsLoaded() then
+    repeat
+        game.Loaded:Wait()
+    until game:IsLoaded()
+end
 
 local Scripts = {
     [10762636904] = "https://raw.githubusercontent.com/MomoHub007/ZeroX-Best-Script/refs/heads/main/Games/Camera%20Tower%20Defends.lua",
