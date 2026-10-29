@@ -3520,6 +3520,42 @@ do
         return cached
     end
 
+    local function farmBase(definition)
+        local tiers = type(definition) == "table"
+            and definition.Upgrades
+        local base = type(tiers) == "table" and tiers[1]
+
+        if type(base) == "table"
+            and finite(base.CashPerWave)
+            and base.CashPerWave > 0 then
+            return base
+        end
+
+        return nil
+    end
+
+    local function farmInvestmentAllowed()
+        local sell = Options.ZeroXMatchSellFarms
+
+        if not sell or sell.Value ~= true then
+            return true
+        end
+
+        local input = Options.ZeroXMatchSellFarmWave
+        local digits = input
+            and tostring(input.Value):match("^%s*(%d+)%s*$")
+        local sellWave = digits and tonumber(digits)
+        local wave = workspace:GetAttribute("Wave")
+
+        -- ไม่ลงทุนฟาร์มเมื่อเงื่อนไขขายยังอ่านไม่ได้
+        if not finite(sellWave) or sellWave < 1
+            or not finite(wave) then
+            return false
+        end
+
+        return wave < sellWave
+    end
+
     local function upgradeAction(config, records, money)
         -- Helper ใหม่: อ่านขั้นอัปเกรดจากโครงสร้าง Config เดิม
         local function inspect(id)
@@ -3534,6 +3570,11 @@ do
             end
 
             local definition = config.Towers[record.Name]
+
+            if farmBase(definition) and not farmInvestmentAllowed() then
+                return nil, "FarmStopped"
+            end
+
             local tiers = type(definition) == "table"
                 and definition.Upgrades
             local level = record.Level or 1
@@ -3614,6 +3655,261 @@ do
         return best
     end
 
+    local function farmPlacementAction(
+        root, models, config, modules, records, money
+    )
+        if not farmInvestmentAllowed() then
+            return nil
+        end
+
+        local area = root:FindFirstChild("TowerArea")
+        local surface = area and area:FindFirstChild("Part")
+        local waypoints = root:FindFirstChild("Waypoints")
+        local placed = LocalPlayer:FindFirstChild("PlacedTowers")
+
+        if not surface or not surface:IsA("BasePart")
+            or not waypoints
+            or not placed or not placed:IsA("IntValue")
+            or placed.Value >= 15 then
+            return nil
+        end
+
+        local samples = getRoute(waypoints, modules.BezierPath)
+        if not samples or #samples < 2 then
+            return nil
+        end
+
+        local counts = {}
+        local hasAttacker = false
+
+        for _, record in pairs(records) do
+            if owned(record) and type(record.Name) == "string" then
+                counts[record.Name] = (counts[record.Name] or 0) + 1
+
+                local definition = config.Towers[record.Name]
+                local tiers = type(definition) == "table"
+                    and definition.Upgrades
+                local base = type(tiers) == "table" and tiers[1]
+
+                if not farmBase(definition) and attack(base) then
+                    hasAttacker = true
+                end
+            end
+        end
+
+        -- ต้องมีตัวโจมตีของเราก่อนเริ่มวางฟาร์ม
+        if not hasAttacker then
+            return nil
+        end
+
+        local candidates = {}
+        local seen = {}
+
+        for slot = 1, 5 do
+            local name = LocalPlayer:GetAttribute("Slot" .. slot)
+            local unitId = LocalPlayer:GetAttribute("Slot" .. slot .. "Id")
+
+            if type(name) == "string" and name ~= ""
+                and type(unitId) == "string" and unitId ~= ""
+                and not seen[name] then
+                seen[name] = true
+
+                local definition = config.Towers[name]
+                local base = farmBase(definition)
+                local price = base and base.Price
+                local limit = type(definition) == "table"
+                    and definition.PlacementLimit
+
+                local validLimit = limit == nil
+                    or (
+                        finite(limit)
+                        and limit >= 0
+                        and limit % 1 == 0
+                    )
+
+                if base and finite(price) and price >= 0
+                    and price <= money and validLimit
+                    and (
+                        limit == nil
+                        or (counts[name] or 0) < limit
+                    ) then
+                    local info = geometry(name, definition)
+
+                    if info then
+                        -- ใช้วงครอบ footprint เพื่อเว้นขอบพื้นที่
+                        local margin = math.sqrt(
+                            info.size.X ^ 2 + info.size.Z ^ 2
+                        ) / 2 + 1
+
+                        local spanX = surface.Size.X / 2 - margin
+                        local spanZ = surface.Size.Z / 2 - margin
+
+                        if spanX >= 0 and spanZ >= 0 then
+                            -- กริดจำกัด 5×5 ไม่สแกนทั้ง Workspace
+                            for gx = 0, 4 do
+                                for gz = 0, 4 do
+                                    local point =
+                                        surface.CFrame:PointToWorldSpace(
+                                            Vector3.new(
+                                                -spanX + spanX * gx / 2,
+                                                surface.Size.Y / 2,
+                                                -spanZ + spanZ * gz / 2
+                                            )
+                                        )
+
+                                    local clearance = math.huge
+
+                                    -- ระยะใกล้ที่สุดถึงเส้นทางบน XZ
+                                    for segment = 1, #samples - 1 do
+                                        local a = samples[segment]
+                                        local b = samples[segment + 1]
+                                        local dx = b.X - a.X
+                                        local dz = b.Z - a.Z
+                                        local lengthSquared = dx * dx + dz * dz
+                                        local t = 0
+
+                                        if lengthSquared > 0 then
+                                            t = math.clamp(
+                                                (
+                                                    (point.X - a.X) * dx
+                                                    + (point.Z - a.Z) * dz
+                                                ) / lengthSquared,
+                                                0,
+                                                1
+                                            )
+                                        end
+
+                                        clearance = math.min(
+                                            clearance,
+                                            distanceXZ(
+                                                point,
+                                                Vector3.new(
+                                                    a.X + dx * t,
+                                                    point.Y,
+                                                    a.Z + dz * t
+                                                )
+                                            )
+                                        )
+                                    end
+
+                                    local key = "Farm:" .. name
+                                        .. ":" .. gx .. ":" .. gz
+                                    local untilTime = rejectedPositions[key]
+
+                                    if not untilTime
+                                        or os.clock() >= untilTime then
+                                        table.insert(candidates, {
+                                            kind = "Place",
+                                            name = name,
+                                            unitId = unitId,
+                                            price = price,
+                                            info = info,
+                                            position = point,
+                                            key = key,
+                                            clearance = clearance,
+                                            efficiency = base.CashPerWave
+                                                / math.max(price, 1),
+                                        })
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+
+        table.sort(candidates, function(a, b)
+            if a.efficiency ~= b.efficiency then
+                return a.efficiency > b.efficiency
+            end
+            if a.clearance ~= b.clearance then
+                return a.clearance > b.clearance
+            end
+            return a.key < b.key
+        end)
+
+        local ray = RaycastParams.new()
+        ray.FilterType = Enum.RaycastFilterType.Include
+        ray.FilterDescendantsInstances = { surface }
+
+        local overlap = OverlapParams.new()
+        overlap.FilterType = Enum.RaycastFilterType.Include
+        overlap.FilterDescendantsInstances = { models }
+
+        for index = 1, math.min(#candidates, 8) do
+            local action = candidates[index]
+            local length = surface.Size.Magnitude
+                + action.info.size.Magnitude
+
+            local hit = workspace:Raycast(
+                action.position + surface.CFrame.UpVector * length,
+                -surface.CFrame.UpVector * length * 2,
+                ray
+            )
+
+            if hit and hit.Instance == surface then
+                local pivot = CFrame.new(
+                    hit.Position + Vector3.new(0, action.info.offset, 0)
+                )
+
+                if #workspace:GetPartBoundsInBox(
+                    pivot, action.info.size, overlap
+                ) == 0 then
+                    action.pivot = pivot
+                    return action
+                end
+            end
+
+            rejectedPositions[action.key] = os.clock() + 2
+        end
+
+        return nil
+    end
+
+    local function maxUpgradeProfile(definition)
+        local tiers = type(definition) == "table"
+            and definition.Upgrades
+
+        if type(tiers) ~= "table" then
+            return nil
+        end
+
+        local maxLevel = 0
+
+        for level in pairs(tiers) do
+            if finite(level) and level >= 1 and level % 1 == 0 then
+                maxLevel = math.max(maxLevel, level)
+            end
+        end
+
+        if maxLevel == 0 then
+            return nil
+        end
+
+        local totalCost = 0
+
+        -- ตรวจว่าขั้นต่อเนื่องกัน และราคาแต่ละขั้นอ่านได้จริง
+        for level = 1, maxLevel do
+            local tier = tiers[level]
+            local price = type(tier) == "table" and tier.Price
+
+            if not finite(price) or price < 0 then
+                return nil
+            end
+
+            totalCost += price
+        end
+
+        local profile = attack(tiers[maxLevel])
+
+        if not profile or not finite(totalCost) then
+            return nil
+        end
+
+        return profile, totalCost
+    end
+
     local function placementAction(root, models, config, modules, records, money)
         local area = root:FindFirstChild("TowerArea")
         local surface = area and area:FindFirstChild("Part")
@@ -3640,17 +3936,7 @@ do
                 counts[record.Name] = (counts[record.Name] or 0) + 1
 
                 local definition = config.Towers[record.Name]
-                local tiers = type(definition) == "table"
-                    and definition.Upgrades
-                local level = record.Level or 1
-                local stats = record.Stats
-
-                if type(stats) ~= "table" and type(tiers) == "table"
-                    and finite(level) then
-                    stats = tiers[level]
-                end
-
-                local profile = attack(stats)
+                local profile = maxUpgradeProfile(definition)
                 local position = record.Pos
 
                 if typeof(position) ~= "Vector3" then
@@ -3672,6 +3958,40 @@ do
             end
         end
 
+        local function coveredLength(center, radius, pointA, pointB)
+            local dx = pointB.X - pointA.X
+            local dz = pointB.Z - pointA.Z
+            local lengthSquared = dx * dx + dz * dz
+
+            if lengthSquared <= 0 then
+                return 0
+            end
+
+            local fx = pointA.X - center.X
+            local fz = pointA.Z - center.Z
+
+            local projection = -(fx * dx + fz * dz) / lengthSquared
+            local closestX = fx + projection * dx
+            local closestZ = fz + projection * dz
+            local remaining = radius * radius
+                - closestX * closestX
+                - closestZ * closestZ
+
+            if remaining <= 0 then
+                return 0
+            end
+
+            local halfSpan = math.sqrt(remaining / lengthSquared)
+            local startAt = math.max(0, projection - halfSpan)
+            local endAt = math.min(1, projection + halfSpan)
+
+            if endAt <= startAt then
+                return 0
+            end
+
+            return (endAt - startAt) * math.sqrt(lengthSquared)
+        end
+
         local proposals = {}
         local seen = {}
 
@@ -3681,7 +4001,7 @@ do
             local definition = type(name) == "string" and config.Towers[name]
             local tiers = type(definition) == "table" and definition.Upgrades
             local base = type(tiers) == "table" and tiers[1]
-            local profile = attack(base)
+            local profile, totalCost = maxUpgradeProfile(definition)
             local price = type(base) == "table" and base.Price
             local limit = type(definition) == "table"
                 and definition.PlacementLimit
@@ -3702,7 +4022,7 @@ do
                     local offset =
                         math.sqrt(info.size.X ^ 2 + info.size.Z ^ 2) / 2 + 1
 
-                    for index = 2, #samples - 1, 6 do
+                    for index = 2, #samples - 1, 3 do
                         local direction = samples[index + 1]
                             - samples[index - 1]
                         local normal = Vector3.new(
@@ -3722,12 +4042,41 @@ do
 
                                 if not rejectedUntil
                                     or os.clock() >= rejectedUntil then
-                                    for sampleIndex, point in ipairs(samples) do
-                                        if distanceXZ(position, point)
-                                            <= profile.range then
-                                            score += profile.dps
-                                                / (30 + defense[sampleIndex])
+                                    local coverage = 0
+                                    local overlapWeight = 0
+
+                                    for segment = 1, #samples - 1 do
+                                        local length = coveredLength(
+                                            position,
+                                            profile.range,
+                                            samples[segment],
+                                            samples[segment + 1]
+                                        )
+
+                                        if length > 0 then
+                                            coverage += length
+
+                                            local existingDps = (
+                                                defense[segment]
+                                                + defense[segment + 1]
+                                            ) / 2
+
+                                            -- ค่าระหว่าง 0–1
+                                            local saturation = existingDps
+                                                / (existingDps + profile.dps)
+
+                                            overlapWeight += length * saturation
                                         end
+                                    end
+
+                                    if coverage > 0 then
+                                        -- น้ำหนักของสูตร ไม่ใช่ข้อมูลสถานะเกม
+                                        local overlapPenalty = 0.10
+                                            * overlapWeight / coverage
+
+                                        score = coverage
+                                            * profile.dps
+                                            * (1 - overlapPenalty)
                                     end
 
                                     if score > 0 then
@@ -3739,7 +4088,8 @@ do
                                             info = info,
                                             position = position,
                                             key = key,
-                                            score = score / math.max(price, 1),
+                                            score = score
+                                                / math.max(totalCost, 1),
                                         })
                                     end
                                 end
@@ -3868,12 +4218,38 @@ do
         if pending then
             local confirmed = false
 
-            if pending.kind == "Place" and pending.acknowledged then
-                local record = records[pending.acknowledged]
+            if pending.kind == "Place" then
+                -- Helper ใหม่: ตรวจข้อมูล replicated โดยไม่ต้องรอ Event
+                local function matchesPlacement(id, record)
+                    return type(id) == "string"
+                        and not pending.before[id]
+                        and owned(record)
+                        and record.Name == pending.name
+                        and record.UnitId == pending.unitId
+                        and typeof(record.Pos) == "Vector3"
+                        and (record.Pos - pending.position).Magnitude <= 0.5
+                end
 
-                confirmed = owned(record)
-                    and record.Name == pending.name
-                    and record.UnitId == pending.unitId
+                local matchedId
+                local ambiguous = false
+
+                -- ตรวจเฉพาะตารางทาวเวอร์ที่มีอยู่แล้ว
+                -- ไม่สแกน Workspace และไม่ส่งคำขอเพิ่ม
+                for id, record in pairs(records) do
+                    if matchesPlacement(id, record) then
+                        if matchedId then
+                            ambiguous = true
+                            break
+                        end
+
+                        matchedId = id
+                    end
+                end
+
+                if matchedId and not ambiguous then
+                    pending.acknowledged = matchedId
+                    confirmed = true
+                end
 
             elseif pending.kind == "Upgrade" and pending.acknowledged then
                 local record = records[pending.id]
@@ -3901,8 +4277,26 @@ do
 
         local action
 
-        if autoUpgrade then
-            -- รอ Remote ก่อน ไม่ใช้เงินไปวางแทรก
+        -- ให้การวางยูนิตเพิ่มมีความสำคัญก่อน
+        if autoPlace then
+            if not add then
+                show("รอโหลด TowerAdd")
+                return
+            end
+
+            action = farmPlacementAction(
+                root, models, config, modules, records, money.Value
+            )
+
+            if not action then
+                action = placementAction(
+                    root, models, config, modules, records, money.Value
+                )
+            end
+        end
+
+        -- ถ้ายังวางเพิ่มได้ จะไม่เลือกคำสั่งอัปเกรดในรอบนี้
+        if not action and autoUpgrade then
             if not upgrade then
                 show("รอโหลด TowerUpgrade")
                 return
@@ -3914,14 +4308,6 @@ do
                 show("รอข้อมูลยูนิตที่กำลังอัปเกรด")
                 return
             end
-        end
-
-        -- วางเพิ่มเมื่อไม่มีเป้าหมายที่ต้องอัปแล้ว
-        -- หรือเมื่อปิด Auto Upgrade
-        if not action and autoPlace and add then
-            action = placementAction(
-                root, models, config, modules, records, money.Value
-            )
         end
 
         if not action then
