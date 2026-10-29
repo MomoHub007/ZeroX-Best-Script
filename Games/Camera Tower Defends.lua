@@ -4,6 +4,11 @@ if not game:IsLoaded() then
     until game:IsLoaded()
 end
 
+
+local print = function() end
+local warn = function() end
+
+
 local BASE = (getgenv and getgenv().MacUIBase) or "https://raw.githubusercontent.com/Kiwzu/Mac-OS-UI-LUA/refs/heads/main/"
 
 local MacUI = loadstring(game:HttpGet(BASE .. "MacUIFramework.lua"))()
