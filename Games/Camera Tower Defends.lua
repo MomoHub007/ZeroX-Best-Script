@@ -2584,13 +2584,20 @@ do
             return
         end
 
-        if workspace:GetAttribute("GameState") ~= "InWave"
+        local phase = workspace:GetAttribute("GameState")
+
+        if (phase ~= "InWave" and phase ~= "Intermission")
             or canSkip ~= true then
             show(waveStatus, "รอเกมอนุญาตให้ข้ามเวฟ")
             return
         end
 
-        if lastSkip == wave then return end
+        -- แยกคำขอช่วงเล่นเวฟกับช่วงพักของเลขเวฟเดียวกัน
+        local skipKey = tostring(wave) .. ":" .. phase
+
+        if lastSkip == skipKey then
+            return
+        end
 
         local remote = getRemote("RemoteEvent", "WaveSkip")
 
@@ -2599,7 +2606,7 @@ do
             return
         end
 
-        lastSkip = wave
+        lastSkip = skipKey
 
         local ok, problem = pcall(function()
             remote:FireServer()
