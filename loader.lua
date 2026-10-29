@@ -2,7 +2,8 @@
 -- [GameId] = "Raw URL",
 
 local Scripts = {
-    [10512942223] = "https://raw.githubusercontent.com/MomoHub007/ZeroX-Best-Script/refs/heads/main/Games/Anime%20Zero%20X.lua",
+    [10762636904] = "https://raw.githubusercontent.com/MomoHub007/ZeroX-Best-Script/refs/heads/main/Games/Camera%20Tower%20Defends.lua",
+    
 }
 
 local gameId = game.GameId
