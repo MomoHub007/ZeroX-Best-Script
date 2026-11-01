@@ -6734,7 +6734,6 @@ end
 
     local toggle = section:AddToggle("ZeroXAutoExecute", {
         Title = "Auto Execute",
-        Description = "รัน Loader อัตโนมัติหลังวาร์ปหรือ Rejoin",
         Default = initialEnabled,
         Callback = ApplyEnabled,
     })
