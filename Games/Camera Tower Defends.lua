@@ -6507,6 +6507,276 @@ SaveManager:SetFolder("ZeroX/" .. tostring(game.GameId))
 SaveManager:IgnoreThemeSettings()
 SaveManager:BuildConfigSection(Tabs.Profiles)
 
+--------------------------------------------------------------------------------
+-- PROFILES: Auto Execute after teleport / rejoin
+--------------------------------------------------------------------------------
+do
+    local LOADER_URL =
+        "https://raw.githubusercontent.com/MomoHub007/ZeroX-Best-Script/refs/heads/main/loader.lua"
+
+    local env = type(getgenv) == "function" and getgenv() or _G
+    local flagFile = "ZeroX/AutoExecute/" .. tostring(game.GameId) .. ".txt"
+    local runtimeKey = "__ZEROX_AUTO_EXECUTE_V1"
+    local runtime = env[runtimeKey]
+
+    if type(runtime) ~= "table" then
+        runtime = {}
+        env[runtimeKey] = runtime
+    end
+
+    if runtime.Connection then
+        runtime.Connection:Disconnect()
+        runtime.Connection = nil
+    end
+
+    local owner = {}
+    local active = true
+
+    runtime.Owner = owner
+    runtime.Enabled = false
+
+    local section = Tabs.Profiles:AddSection({
+        Title = "Auto Execute",
+        Icon = "play",
+    })
+
+    local status = section:AddLabel({
+        Title = "Status",
+        Value = "Disabled",
+    })
+
+    local function OwnsRuntime()
+        return active and runtime.Owner == owner
+    end
+
+    local function SetStatus(message, isError)
+        if not OwnsRuntime() then return end
+
+        status:SetValue(message)
+
+        if isError then
+            Window:Toast("Auto Execute", {
+                Detail = tostring(message),
+            })
+        end
+    end
+
+    local function GetQueue()
+        if type(env.queue_on_teleport) == "function" then
+            return env.queue_on_teleport
+        end
+
+        if type(env.queueonteleport) == "function" then
+            return env.queueonteleport
+        end
+
+        return nil
+    end
+
+    local function WriteFlag(enabled)
+        for _, name in ipairs({
+            "makefolder", "isfolder", "isfile",
+            "readfile", "writefile",
+        }) do
+            if type(env[name]) ~= "function" then
+                return false, "Executor API unavailable: " .. name
+            end
+        end
+
+        return pcall(function()
+            for _, folder in ipairs({
+                "ZeroX",
+                "ZeroX/AutoExecute",
+            }) do
+                if not env.isfolder(folder) then
+                    env.makefolder(folder)
+                end
+            end
+
+            local value = enabled and "1" or "0"
+            env.writefile(flagFile, value)
+
+            assert(
+                env.readfile(flagFile) == value,
+                "Auto Execute setting verification failed"
+            )
+        end)
+    end
+
+    local initialEnabled = false
+
+    if type(env.isfile) == "function"
+        and type(env.readfile) == "function" then
+        local ok, value = pcall(function()
+            return env.isfile(flagFile)
+                and env.readfile(flagFile) == "1"
+        end)
+
+        initialEnabled = ok and value == true
+    end
+
+    local payload = string.format([=[
+local env = type(getgenv) == "function" and getgenv() or _G
+
+local function Enabled()
+    local ok, value = pcall(function()
+        return type(env.isfile) == "function"
+            and type(env.readfile) == "function"
+            and env.isfile(%q)
+            and env.readfile(%q) == "1"
+    end)
+
+    return ok and value == true
+end
+
+if not Enabled() then return end
+
+-- รอโหลดแบบมีเพดาน และตรวจการยกเลิกระหว่างรอ
+local deadline = os.clock() + 120
+
+while not game:IsLoaded() do
+    if not Enabled() then return end
+
+    if os.clock() >= deadline then
+        warn("[Zero X / Auto Execute] Game load timeout")
+        return
+    end
+
+    task.wait(0.25)
+end
+
+if not Enabled() then return end
+
+if env.__ZEROX_MULTI_GAME_LOADER
+    or env.__ZEROX_AUTO_EXECUTE_LOADING then
+    return
+end
+
+env.__ZEROX_AUTO_EXECUTE_LOADING = true
+
+local ran, err = pcall(function()
+    local source = game:HttpGet(%q)
+
+    assert(
+        type(source) == "string" and source:match("%%S"),
+        "Loader response is empty"
+    )
+
+    -- ปิดระหว่างดาวน์โหลด: ไม่เริ่มรัน Loader
+    if not Enabled() then return end
+
+    assert(
+        type(loadstring) == "function",
+        "loadstring unavailable"
+    )
+
+    local chunk, compileError =
+        loadstring(source, "ZeroXAutoExecute")
+
+    assert(chunk, compileError)
+
+    if not Enabled() then return end
+    chunk()
+end)
+
+env.__ZEROX_AUTO_EXECUTE_LOADING = nil
+
+if not ran then
+    warn("[Zero X / Auto Execute] " .. tostring(err))
+end
+]=], flagFile, flagFile, LOADER_URL)
+
+    local function QueueLoader()
+        if not OwnsRuntime() or not runtime.Enabled then return end
+
+        if runtime.Queued then
+            SetStatus("Loader already queued")
+            return
+        end
+
+        local queueFn = GetQueue()
+
+        if not queueFn then
+            SetStatus("Teleport queue API unavailable", true)
+            return
+        end
+
+        local queued, queueError = pcall(queueFn, payload)
+
+        if not OwnsRuntime() then return end
+
+        if queued then
+            runtime.Queued = true
+            SetStatus("Loader queued - ready for teleport")
+        else
+            SetStatus("Queue failed: " .. tostring(queueError), true)
+        end
+    end
+
+    local function ApplyEnabled(value)
+        if not OwnsRuntime() then return end
+
+        local enabled = value == true
+        runtime.Enabled = enabled
+
+        local ok, err = WriteFlag(enabled)
+
+        if not ok then
+            SetStatus("Setting write failed: " .. tostring(err), true)
+            return
+        end
+
+        if enabled then
+            QueueLoader()
+        else
+            SetStatus("Disabled")
+        end
+    end
+
+    local toggle = section:AddToggle("ZeroXAutoExecute", {
+        Title = "Auto Execute",
+        Description = "รัน Loader อัตโนมัติหลังวาร์ปหรือ Rejoin",
+        Default = initialEnabled,
+        Callback = ApplyEnabled,
+    })
+
+    ApplyEnabled(toggle.Value)
+
+    runtime.Connection = LocalPlayer.OnTeleport:Connect(function(teleportState)
+        if not OwnsRuntime() or not runtime.Enabled then return end
+        if teleportState ~= Enum.TeleportState.Started then return end
+
+        local saved, saveError = WriteFlag(true)
+
+        if not saved then
+            SetStatus("Cannot queue: " .. tostring(saveError), true)
+            return
+        end
+
+        QueueLoader()
+    end)
+
+    MacUI:OnUnload(function()
+        if runtime.Owner ~= owner then return end
+
+        active = false
+        runtime.Enabled = false
+
+        if runtime.Connection then
+            runtime.Connection:Disconnect()
+            runtime.Connection = nil
+        end
+
+        local ok, err = WriteFlag(false)
+
+        if not ok then
+            Window:Toast("Auto Execute", {
+                Detail = "Could not cancel queued loader: " .. tostring(err),
+            })
+        end
+    end)
+end
+
 -- Keep this call after all controls are created.
 SaveManager:LoadAutoloadConfig()
 
