@@ -4849,7 +4849,6 @@ do
         for _, index in ipairs({
             "ZeroXAutoPlace",
             "ZeroXAutoUpgrade",
-            "ZeroXMatchSellFarms",
         }) do
             local control = Options[index]
             if control and control.Value == true then
@@ -5135,7 +5134,7 @@ do
         if playing then return false, "หยุดเล่นมาโครก่อนบันทึก" end
 
         if conflicting() then
-            return false, "ปิด Auto Place, Auto Upgrade และขายตัวฟาร์มก่อน"
+            return false, "ปิด Auto Place และ Auto Upgrade ก่อน"
         end
 
         if hasOwnedTowers(data) then
@@ -5332,7 +5331,7 @@ do
         end
 
         if conflicting() then
-            return false, "ปิด Auto Place, Auto Upgrade และขายตัวฟาร์มก่อน"
+            return false, "ปิด Auto Place และ Auto Upgrade ก่อน"
         end
 
         if hasOwnedTowers(data) then
