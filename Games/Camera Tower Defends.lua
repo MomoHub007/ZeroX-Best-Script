@@ -4988,9 +4988,9 @@ do
 
     section:AddInput("ZeroXMacroDraftName", {
         Title = "Create Macro · ตั้งชื่อมาโคร",
-        Description = "ชื่อสำหรับสร้างรายการมาโครใหม่",
+        Description = "พิมพ์ชื่อแล้วกดสร้างได้เลย ไม่ต้องกด Enter",
         Placeholder = "ชื่อมาโคร",
-        Finished = true,
+        Finished = false,
         Callback = function(value)
             draftName = tostring(value or ""):match("^%s*(.-)%s*$")
         end,
