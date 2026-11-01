@@ -3062,13 +3062,6 @@ do
     end
 
     local function evaluateFarmSelling()
-        local macro = _G.ZeroXMacroController
-
-        if type(macro) == "table" and macro.Active and not farmPending then
-            show(farmStatus, "พักขายตัวฟาร์มระหว่างใช้มาโคร")
-            return
-        end
-
         if game.PlaceId ~= 114068177100380 then
             show(farmStatus, farmEnabled and "รอเข้าด่าน" or "ปิดอยู่")
             return
@@ -3173,11 +3166,20 @@ do
         -- เชื่อมสัญญาณก่อนส่งขาย
         bindFarmRemoval(removeRemote)
 
+        local macroController = _G.ZeroXMacroController
+
+        local function reservedByMacro(id)
+            return type(macroController) == "table"
+                and type(macroController.ReservesTower) == "function"
+                and macroController.ReservesTower(id)
+        end
+
         local candidate
 
         for id, record in pairs(records) do
             if type(id) == "string"
                 and isOwnedFarm(record, config)
+                and not reservedByMacro(id)
                 and (not candidate or id < candidate.id) then
                 candidate = {
                     id = id,
@@ -3205,6 +3207,11 @@ do
             acknowledged = false,
         }
 
+        if type(macroController) == "table"
+            and type(macroController.NoteSale) == "function" then
+            macroController.NoteSale(candidate.id)
+        end
+
         local ok, problem = pcall(function()
             sellRemote:FireServer({
                 Id = candidate.id,
@@ -3212,6 +3219,10 @@ do
         end)
 
         if not ok then
+            if type(macroController) == "table"
+                and type(macroController.CancelSale) == "function" then
+                macroController.CancelSale(candidate.id)
+            end
             farmStopped = true
             show(farmStatus, "ส่งขายไม่สำเร็จ หยุดโดยไม่ส่งซ้ำ")
             warn("[Zero X / Farm Sell]", problem)
@@ -5112,6 +5123,13 @@ do
                     or action.level < 2 or action.level % 1 ~= 0 then
                     return false
                 end
+
+            elseif action.kind == "Sell" then
+                if not keys[action.key] then
+                    return false
+                end
+
+                keys[action.key] = nil
             else
                 return false
             end
@@ -5154,6 +5172,7 @@ do
             startedAt = os.clock(),
             keys = {},
             levels = {},
+            sales = {},
         }
 
         controller.Active = true
@@ -5230,6 +5249,248 @@ do
         action.waveTime = math.max(os.clock() - waveStartedAt, 0)
         table.insert(recording.macro.Actions, action)
     end
+
+    local function saleId(value)
+        if type(value) == "string" and value ~= "" then
+            return value
+        end
+
+        if finite(value) then
+            return tostring(value)
+        end
+
+        return nil
+    end
+
+    function controller.NoteSale(value)
+        local session = recording
+        local id = saleId(value)
+
+        if not alive or not session or not id or not activeMatch() then
+            return
+        end
+
+        local key = session.keys[id]
+        local data = runtime()
+
+        if not key or not data or not owned(data.records[id]) then
+            return
+        end
+
+        if not session.sales[id] then
+            session.sales[id] = {
+                key = key,
+                acknowledged = false,
+                sentAt = os.clock(),
+            }
+        end
+    end
+
+    function controller.CancelSale(value)
+        local id = saleId(value)
+
+        if recording and id then
+            recording.sales[id] = nil
+        end
+    end
+
+    -- มาโครที่มี Sell เป็นผู้กำหนดเวลาขายตัวที่ตัวเองวาง
+    function controller.ReservesTower(value)
+        local id = saleId(value)
+        local session = playing
+
+        if not alive or not session or not id
+            or not session.hasSales then
+            return false
+        end
+
+        for _, mappedId in pairs(session.ids) do
+            if saleId(mappedId) == id then
+                return true
+            end
+        end
+
+        return false
+    end
+
+    local function onRemove(payload)
+        if not alive or not activeMatch()
+            or type(payload) ~= "table" then
+            return
+        end
+
+        local id = saleId(payload.Id or payload.Index)
+        if not id then return end
+
+        local intent = recording and recording.sales[id]
+
+        if intent then
+            intent.acknowledged = true
+        end
+
+        local pending = playing and playing.pending
+
+        if pending and pending.kind == "Sell"
+            and pending.id == id then
+            pending.acknowledged = true
+        end
+    end
+
+    local function removedFromWorld(data, id)
+        local root = workspace:FindFirstChild("Game")
+        local models = root and root:FindFirstChild("Towers")
+
+        -- Container ยังไม่โหลด ไม่ถือว่าขายสำเร็จ
+        return models ~= nil
+            and data.records[id] == nil
+            and models:FindFirstChild(id) == nil
+    end
+
+    local function reconcileRecordedSales(data)
+        local session = recording
+        if not session or not activeMatch() then return end
+
+        for id, intent in pairs(session.sales) do
+            if intent.acknowledged and removedFromWorld(data, id) then
+                if session.keys[id] == intent.key then
+                    append({
+                        kind = "Sell",
+                        key = intent.key,
+                    })
+
+                    if recording ~= session then return end
+
+                    session.keys[id] = nil
+                    session.levels[id] = nil
+                end
+
+                session.sales[id] = nil
+
+            elseif os.clock() - intent.sentAt >= 12 then
+                -- ยังไม่ยืนยัน: ไม่แต่ง Sell และไม่ส่งคำขอซ้ำ
+                state = "Recording · ยังยืนยันการขายไม่ได้: " .. id
+            end
+        end
+    end
+
+    local UIS = game:GetService("UserInputService")
+    local saleUIConnections = {}
+    local saleButton
+    local nativeGameUI
+    local nativeGameUISource
+    local pressedSale
+
+    local function clearSaleUI()
+        for _, connection in ipairs(saleUIConnections) do
+            connection:Disconnect()
+        end
+
+        table.clear(saleUIConnections)
+        saleButton = nil
+        pressedSale = nil
+    end
+
+    local function selectedSaleId()
+        if not recording or not activeMatch()
+            or type(nativeGameUI) ~= "table" then
+            return nil
+        end
+
+        local gui = LocalPlayer:FindFirstChild("PlayerGui")
+        local main = gui and gui:FindFirstChild("GameUI")
+        local panel = main and main:FindFirstChild("TowerUI")
+
+        if not panel or not panel:IsA("GuiObject")
+            or not panel.Visible then
+            return nil
+        end
+
+        local id = saleId(nativeGameUI.CurrentSelectedTower)
+        local data = runtime()
+
+        if id and data and recording.keys[id]
+            and owned(data.records[id]) then
+            return id
+        end
+
+        return nil
+    end
+
+    local function bindSaleUI()
+        local loader = Storage:FindFirstChild("ModuleLoader")
+        local client = loader and loader:FindFirstChild("Client")
+        local ui = client and client:FindFirstChild("UI")
+        local source = ui and ui:FindFirstChild("GameUI")
+
+        if source ~= nativeGameUISource then
+            nativeGameUISource = source
+            nativeGameUI = nil
+
+            if source and source:IsA("ModuleScript") then
+                local ok, result = pcall(require, source)
+
+                if ok and type(result) == "table" then
+                    nativeGameUI = result
+                else
+                    state = "Recording · อ่าน GameUI ไม่สำเร็จ: "
+                        .. tostring(result)
+                end
+            end
+        end
+
+        local gui = LocalPlayer:FindFirstChild("PlayerGui")
+        local main = gui and gui:FindFirstChild("GameUI")
+        local panel = main and main:FindFirstChild("TowerUI")
+        local buttons = panel and panel:FindFirstChild("Buttons")
+        local button = buttons and buttons:FindFirstChild("Sell")
+
+        if button and not button:IsA("GuiButton") then
+            button = nil
+        end
+
+        if button == saleButton then return end
+
+        clearSaleUI()
+        saleButton = button
+
+        if not button then return end
+
+        table.insert(saleUIConnections, button.InputBegan:Connect(function(input)
+            if input.UserInputType ~= Enum.UserInputType.MouseButton1
+                and input.UserInputType ~= Enum.UserInputType.Touch then
+                return
+            end
+
+            pressedSale = {
+                session = recording,
+                id = selectedSaleId(),
+            }
+        end))
+
+        table.insert(saleUIConnections, button.Activated:Connect(function()
+            local pressed = pressedSale
+            pressedSale = nil
+
+            -- ใช้ ID ก่อน Native ล้าง Selection
+            -- กดแล้วลากออกโดยไม่ Activated จะไม่สร้างเจตนาขาย
+            if pressed and pressed.session == recording and pressed.id then
+                controller.NoteSale(pressed.id)
+            end
+        end))
+    end
+
+    table.insert(connections, UIS.InputBegan:Connect(function(input, processed)
+        if processed or UIS:GetFocusedTextBox() then return end
+
+        if input.KeyCode == Enum.KeyCode.Q
+            or input.KeyCode == Enum.KeyCode.ButtonR2 then
+            local id = selectedSaleId()
+
+            if id then
+                controller.NoteSale(id)
+            end
+        end
+    end))
 
     local function onPlace(payload)
         if not alive or not activeMatch()
@@ -5343,8 +5604,19 @@ do
             return false, "แผนที่หรือความยากไม่ตรงกับมาโคร"
         end
 
+        local hasSales = false
+
+        for _, action in ipairs(macro.Actions) do
+            if action.kind == "Sell" then
+                hasSales = true
+                break
+            end
+        end
+
         playing = {
             macro = macro,
+            hasSales = hasSales,
+            lastSellAt = -math.huge,
             mode = playbackMode,
             index = 1,
             ids = {},
@@ -5356,7 +5628,7 @@ do
         return true
     end
 
-    local function evaluatePlayback(data, add, upgrade)
+    local function evaluatePlayback(data, add, upgrade, sell)
         local session = playing
         if not session then return end
 
@@ -5380,6 +5652,13 @@ do
                 confirmed = owned(record)
                     and finite(record.Level)
                     and record.Level >= pending.level
+
+            elseif pending.kind == "Sell" and pending.acknowledged then
+                confirmed = removedFromWorld(data, pending.id)
+
+                if confirmed then
+                    session.ids[pending.key] = nil
+                end
             end
 
             if confirmed then
@@ -5395,7 +5674,12 @@ do
                 end
 
             elseif os.clock() - pending.sentAt >= 12 then
-                stopWithError("หมดเวลายืนยันคำสั่ง ไม่ส่งซ้ำ")
+                if pending.kind == "Sell" then
+                    -- ยังติดตามรายการเดิม ไม่ขายซ้ำหรือปิด Toggle
+                    state = "Waiting · ยังยืนยันการขายไม่ได้: " .. pending.id
+                else
+                    stopWithError("หมดเวลายืนยันคำสั่ง ไม่ส่งซ้ำ")
+                end
             end
 
             return
@@ -5513,6 +5797,51 @@ do
                 Pos = pivot.Position,
                 CFrame = pivot,
             })
+
+        elseif action.kind == "Sell" then
+            local id = saleId(session.ids[action.key])
+
+            if not id then
+                state = "Blocked · ไม่พบ ID สำหรับขายตามมาโคร"
+                return
+            end
+
+            local record = data.records[id]
+
+            -- การหายเฉย ๆ ยังไม่ใช่ผลยืนยันขาย
+            if not owned(record) then
+                state = "Blocked · ตัวที่จะขายหายหรือไม่ใช่ของเรา: " .. id
+                return
+            end
+
+            if not sell then
+                state = "Waiting · รอ TowerSell"
+                return
+            end
+
+            if os.clock() - session.lastSellAt < 0.15 then
+                return
+            end
+
+            if not automatic or playing ~= session then return end
+
+            pending.id = id
+            pending.sentAt = os.clock()
+
+            session.lastSellAt = pending.sentAt
+            session.pending = pending
+
+            local ok, problem = pcall(function()
+                sell:FireServer({ Id = id })
+            end)
+
+            if not ok then
+                -- คง Pending เพื่อกันส่งซ้ำโดยไม่รู้ผล
+                state = "Blocked · ส่งขายไม่สำเร็จ: " .. tostring(problem)
+            else
+                state = "Playing · รอยืนยันขาย: " .. record.Name
+            end
+
         else
             local id = session.ids[action.key]
             local record = id and data.records[id]
@@ -5593,6 +5922,8 @@ do
         local data = runtime()
         local add = bind("TowerAdd", onPlace)
         local upgrade = bind("TowerUpgrade", onUpgrade)
+        local remove = bind("TowerRemove", onRemove)
+        local sell = getRemote("TowerSell")
 
         if not activeMatch() then
             if recording or playing then
@@ -5605,6 +5936,16 @@ do
         if not data or not add or not upgrade then
             state = "Waiting · รอข้อมูลและรีโมทในด่าน"
             return
+        end
+
+        if recording then
+            bindSaleUI()
+
+            if remove then
+                reconcileRecordedSales(data)
+            else
+                state = "Recording · รอ TowerRemove สำหรับยืนยันการขาย"
+            end
         end
 
         if automatic and not attempted and not recording then
@@ -5620,7 +5961,11 @@ do
         end
 
         if playing then
-            evaluatePlayback(data, add, upgrade)
+            if playing.hasSales and (not sell or not remove) then
+                state = "Waiting · รอ TowerSell / TowerRemove"
+            else
+                evaluatePlayback(data, add, upgrade, sell)
+            end
         end
     end
 
@@ -5628,6 +5973,9 @@ do
         if not alive then return end
         stopSession()
         alive = false
+        clearSaleUI()
+        nativeGameUI = nil
+        nativeGameUISource = nil
 
         for _, connection in ipairs(connections) do
             connection:Disconnect()
