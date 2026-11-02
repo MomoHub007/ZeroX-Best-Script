@@ -4022,6 +4022,255 @@ do
             return nil
         end
 
+        do
+            -- เก็บข้อมูล Dungeon แยกจากการเปิด Auto Farm / Auto Dodge
+            -- ใช้ InsideAttack และ MonsterData ที่อยู่ใน Scope นี้จริง
+            local D = {
+                Events = {},
+                Feed = nil,
+                Blocked = nil,
+                HistoryUnknown =
+                    workspace:GetAttribute("PlaceRole") == "Dungeon"
+                    and workspace:GetAttribute("DungeonState") == "running",
+            }
+
+            JobAutomation.DungeonDanger = D
+
+            local function Prune()
+                local now = os.clock()
+
+                for i = #D.Events, 1, -1 do
+                    local event = D.Events[i]
+
+                    if event.Expires and now >= event.Expires then
+                        table.remove(D.Events, i)
+                    end
+                end
+            end
+
+            -- หาระยะเวลาพื้นที่ค้างจาก Config จริง
+            -- หากชื่อสกิลซ้ำ ใช้ระยะเวลาที่ยาวที่สุด
+            local function ReadPoolDuration(skillName)
+                local found = false
+                local longest = 0
+
+                for _, definition in pairs(monsterData) do
+                    if type(definition) == "table" then
+                        for _, field in ipairs({ "Skills", "LeaderMoves" }) do
+                            local moves = definition[field]
+
+                            if type(moves) == "table" then
+                                for _, move in pairs(moves) do
+                                    if type(move) == "table"
+                                        and move.Name == skillName then
+                                        found = true
+
+                                        if move.Pool then
+                                            if type(move.Pool) ~= "table"
+                                                or not NumberOK(
+                                                    move.Pool.Duration
+                                                )
+                                                or move.Pool.Duration < 0 then
+                                                return nil
+                                            end
+
+                                            longest = math.max(
+                                                longest,
+                                                move.Pool.Duration
+                                            )
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+
+                if found then return longest end
+                return nil
+            end
+
+            function D.Observe(
+                action, bossName, skillName, zonesData, duration
+            )
+                if not alive
+                    or workspace:GetAttribute("PlaceRole") ~= "Dungeon"
+                    or workspace:GetAttribute("DungeonState")
+                        ~= "running" then
+                    return
+                end
+
+                if action ~= "warn"
+                    and action ~= "hit"
+                    and action ~= "cancel" then
+                    return
+                end
+
+                if type(bossName) ~= "string"
+                    or type(skillName) ~= "string" then
+                    D.Blocked = "invalid BossFx identifiers"
+                    return
+                end
+
+                Prune()
+
+                -- ชื่อเดียวกันอาจมีหลายผู้ร่าย:
+                -- ไม่ลบ Event จาก cancel โดยเดาตัวผู้ร่าย
+                if action == "cancel" then
+                    return
+                end
+
+                if not NumberOK(duration) or duration < 0 then
+                    D.Blocked = "invalid BossFx duration"
+                    return
+                end
+
+                if action == "hit" then
+                    local matched = false
+
+                    for _, event in ipairs(D.Events) do
+                        if event.BossName == bossName
+                            and event.SkillName == skillName then
+                            matched = true
+
+                            -- ขยายทุก Event ที่อาจเกี่ยวข้อง
+                            -- ไม่เลือกมอนจากความใกล้โดยเดา
+                            if event.Expires and event.Pool ~= nil then
+                                event.Expires = math.max(
+                                    event.Expires,
+                                    os.clock()
+                                        + math.max(duration, event.Pool)
+                                        + DODGE_SETTLE
+                                )
+                            end
+                        end
+                    end
+
+                    if not matched then
+                        D.Blocked = "hit received without captured warn"
+                        D.HistoryUnknown = true
+                    end
+
+                    return
+                end
+
+                if type(zonesData) ~= "table"
+                    or #zonesData == 0
+                    or #zonesData > 64 then
+                    D.Blocked = "invalid / oversized BossFx geometry"
+                    return
+                end
+
+                if #D.Events >= 64 then
+                    D.Blocked = "Dungeon hazard resource limit"
+                    return
+                end
+
+                local snapshot = {}
+
+                for _, zone in ipairs(zonesData) do
+                    if type(zone) ~= "table" then
+                        D.Blocked = "invalid BossFx zone"
+                        return
+                    end
+
+                    snapshot[#snapshot + 1] = table.clone(zone)
+                end
+
+                local pool = ReadPoolDuration(skillName)
+
+                D.Events[#D.Events + 1] = {
+                    BossName = bossName,
+                    SkillName = skillName,
+                    Zones = snapshot,
+                    Pool = pool,
+
+                    -- ไม่กำหนดอายุขึ้นมาเองเมื่อหา Config ไม่พบ
+                    Expires = pool ~= nil
+                        and (os.clock() + duration + pool + DODGE_SETTLE)
+                        or nil,
+                }
+            end
+
+            -- ตรวจเฉพาะพื้นที่สกิลที่รับข้อมูลมาแล้ว
+            -- CLEAR_OF_OBSERVED ไม่ได้หมายถึงกันดาเมจทุกชนิด
+            function D.Evaluate(position)
+                if not alive or typeof(position) ~= "Vector3" then
+                    return "UNKNOWN", "invalid danger context"
+                end
+
+                if not D.Feed or not D.Feed.Parent
+                    or remotes:FindFirstChild("BossFx") ~= D.Feed then
+                    return "UNKNOWN", "BossFx feed unavailable"
+                end
+
+                if monsterModule.Parent ~= shared
+                    or shared:FindFirstChild("MonsterData")
+                        ~= monsterModule then
+                    return "UNKNOWN", "MonsterData reference changed"
+                end
+
+                if D.Blocked then
+                    return "UNKNOWN", D.Blocked
+                end
+
+                Prune()
+
+                local unknown = false
+
+                for _, event in ipairs(D.Events) do
+                    if event.Expires == nil then
+                        unknown = true
+                    end
+
+                    local inSafe = false
+                    local roomDanger = false
+
+                    for _, zone in ipairs(event.Zones) do
+                        local inside = InsideAttack(zone, position, 0)
+
+                        if inside == nil then
+                            unknown = true
+                        elseif zone.Safe == true then
+                            if inside then inSafe = true end
+                        elseif inside then
+                            if zone.Room == true
+                                or zone.Kind == "room" then
+                                roomDanger = true
+                            else
+                                return "UNSAFE", event.SkillName
+                            end
+                        end
+                    end
+
+                    if roomDanger and not inSafe then
+                        return "UNSAFE", event.SkillName
+                    end
+                end
+
+                if unknown then
+                    return "UNKNOWN", "unsupported geometry / lifetime"
+                end
+
+                return "CLEAR_OF_OBSERVED"
+            end
+
+            Connect(
+                workspace:GetAttributeChangedSignal("DungeonState"),
+                function()
+                    if workspace:GetAttribute("DungeonState")
+                        ~= "running" then
+                        table.clear(D.Events)
+                        D.Blocked = nil
+
+                        -- ได้สังเกตช่วงนอกการต่อสู้แล้ว
+                        -- ไม่ใช้เวลารอ 1.5 วินาทีเป็นหลักฐาน
+                        D.HistoryUnknown = false
+                    end
+                end
+            )
+        end
+
         local function PointAllowed(position)
             for _, event in ipairs(dodgeEvents) do
                 local inSafe = false
@@ -4143,9 +4392,21 @@ do
         local bossFx = FindRequired(remotes, "BossFx", "RemoteEvent")
 
         if bossFx then
+            if JobAutomation.DungeonDanger then
+                JobAutomation.DungeonDanger.Feed = bossFx
+            end
+
             Connect(bossFx.OnClientEvent, function(
                 action, bossName, skillName, zonesData, duration
             )
+                local dungeonDanger = JobAutomation.DungeonDanger
+
+                if alive and dungeonDanger then
+                    dungeonDanger.Observe(
+                        action, bossName, skillName, zonesData, duration
+                    )
+                end
+
                 if not alive or not enabled or not dodgeEnabled
                     or potionTripActive or sellTripActive
                     or dropTripActive or chestTripActive
@@ -11790,7 +12051,12 @@ end
                 end
             end
 
-            task.wait(0.5)
+            local combatTick = enabled
+                and not fault
+                and workspace:GetAttribute("PlaceRole") == "Dungeon"
+                and workspace:GetAttribute("DungeonState") == "running"
+
+            task.wait(combatTick and 0.1 or 0.5)
         end
     end)
 
@@ -11933,7 +12199,608 @@ do
         end
     end
 
+    local hoverCollection = game:GetService("CollectionService")
+
+    local dungeonHover
+    local hoverSideTarget
+    local hoverSideRoot
+    local hoverSideDirection
+
+    -- แยกเป้าหมายออกจาก Hover:
+    -- พักการลอยชั่วคราวต้องไม่ทำให้เปลี่ยนมอน
+    local dungeonAttack = {
+        Target = nil,
+        SeenTarget = nil,
+        LockControl = nil,
+        RequestedTarget = nil,
+        NextSearchAt = 0,
+        Candidates = {},
+    }
+
+    local function CacheDungeonMonster(instance)
+        if instance:IsA("Model") then
+            dungeonAttack.Candidates[instance] = true
+            dungeonAttack.NextSearchAt = 0
+        end
+    end
+
+    Connect(
+        hoverCollection:GetInstanceAddedSignal("Monster"),
+        CacheDungeonMonster
+    )
+
+    Connect(
+        hoverCollection:GetInstanceRemovedSignal("Monster"),
+        function(instance)
+            dungeonAttack.Candidates[instance] = nil
+        end
+    )
+
+    for _, instance in ipairs(hoverCollection:GetTagged("Monster")) do
+        CacheDungeonMonster(instance)
+    end
+
+    local function ResetDungeonAttack()
+        dungeonAttack.Target = nil
+        dungeonAttack.SeenTarget = nil
+        dungeonAttack.LockControl = nil
+        dungeonAttack.RequestedTarget = nil
+        dungeonAttack.NextSearchAt = 0
+    end
+
+    local hoverRangeModule
+    local hoverRange
+    local hoverRangeError
+
+    -- ค่านโยบายของสคริปต์ ไม่ใช่ขีดจำกัด Hit Registration ฝั่ง Server
+    local DUNGEON_HOVER_HEIGHT = 2.5
+    local DUNGEON_RANGE_MARGIN = 0.5
+
+    local hoverWallParams = RaycastParams.new()
+    hoverWallParams.FilterType = Enum.RaycastFilterType.Include
+
+    local function RefreshDungeonWalls()
+        hoverWallParams.FilterDescendantsInstances =
+            hoverCollection:GetTagged("DungeonLosWall")
+    end
+
+    RefreshDungeonWalls()
+
+    Connect(
+        hoverCollection:GetInstanceAddedSignal("DungeonLosWall"),
+        RefreshDungeonWalls
+    )
+
+    Connect(
+        hoverCollection:GetInstanceRemovedSignal("DungeonLosWall"),
+        RefreshDungeonWalls
+    )
+
+    -- StopDungeonHover = ลบเฉพาะตัวล็อกที่ระบบ Dungeon เป็นเจ้าของ
+    local function StopDungeonHover()
+        local old = dungeonHover
+        dungeonHover = nil
+
+        hoverSideTarget = nil
+        hoverSideRoot = nil
+        hoverSideDirection = nil
+
+        if not old then return end
+
+        old.Position:Destroy()
+        old.Orientation:Destroy()
+        old.Attachment:Destroy()
+
+        if old.Humanoid.Parent
+            and old.Humanoid.AutoRotate == false then
+            old.Humanoid.AutoRotate = old.AutoRotate
+        end
+    end
+
+    local dungeonDodge
+
+    -- HoldDungeonDodgePoint = ค้างตำแหน่งหลบโดยไม่ล้างเป้าหมาย
+    local function HoldDungeonDodgePoint(humanoid, root, point)
+        if dungeonHover and (
+            dungeonHover.Root ~= root
+            or dungeonHover.Humanoid ~= humanoid
+            or not dungeonHover.Position.Parent
+            or not dungeonHover.Orientation.Parent
+            or not dungeonHover.Attachment.Parent
+        ) then
+            StopDungeonHover()
+        end
+
+        if not dungeonHover then
+            local attachment = Instance.new("Attachment")
+            attachment.Name = "ZeroXDungeonHoverAttachment"
+            attachment.Parent = root
+
+            local position = Instance.new("AlignPosition")
+            position.Name = "ZeroXDungeonHoverPosition"
+            position.Mode = Enum.PositionAlignmentMode.OneAttachment
+            position.Attachment0 = attachment
+            position.ApplyAtCenterOfMass = true
+            position.RigidityEnabled = false
+            position.Responsiveness = 35
+            position.MaxVelocity = 60
+            position.MaxForce = math.max(
+                10000,
+                root.AssemblyMass * math.max(workspace.Gravity, 1) * 40
+            )
+            position.Position = point
+            position.Parent = root
+
+            local orientation = Instance.new("AlignOrientation")
+            orientation.Name = "ZeroXDungeonHoverOrientation"
+            orientation.Mode = Enum.OrientationAlignmentMode.OneAttachment
+            orientation.Attachment0 = attachment
+            orientation.RigidityEnabled = false
+            orientation.Responsiveness = 35
+            orientation.MaxTorque = 500000
+            orientation.MaxAngularVelocity = 20
+            orientation.CFrame = root.CFrame.Rotation
+            orientation.Parent = root
+
+            dungeonHover = {
+                Root = root,
+                Humanoid = humanoid,
+                AutoRotate = humanoid.AutoRotate,
+                Attachment = attachment,
+                Position = position,
+                Orientation = orientation,
+            }
+        end
+
+        local facing = CFrame.new(point) * root.CFrame.Rotation
+
+        humanoid.AutoRotate = false
+        humanoid:Move(Vector3.zero, false)
+
+        dungeonHover.Position.Position = point
+        dungeonHover.Orientation.CFrame = facing.Rotation
+
+        root.CFrame = facing
+        root.AssemblyLinearVelocity = Vector3.zero
+        root.AssemblyAngularVelocity = Vector3.zero
+    end
+
+    local function CanDungeonHover(myRevision)
+        return alive
+            and enabled
+            and revision == myRevision
+            and owner
+            and workspace:GetAttribute("PlaceRole") == "Dungeon"
+            and workspace:GetAttribute("DungeonState") == "running"
+            and LocalPlayer:GetAttribute("DungeonDowned") ~= true
+            and LocalPlayer:GetAttribute("AutoOn") == true
+            and not LocalPlayer.GameplayPaused
+    end
+
+    -- StepDungeonHover = ใช้เป้าปัจจุบันของ Native โดยไม่เปลี่ยน Remote Contract
+    local function StepDungeonHover()
+        local myRevision = revision
+
+        if not CanDungeonHover(myRevision) then
+            StopDungeonHover()
+            return
+        end
+
+        -- Character() ของ Dungeon เดิมคืน Humanoid, Root เพียงสองค่า
+        local humanoid, root = Character()
+
+        if not humanoid or not root then
+            StopDungeonHover()
+            Report("Waiting: Dungeon character")
+            return
+        end
+
+        local shared = RS:FindFirstChild("Shared")
+        local module = shared and shared:FindFirstChild("ClassRange")
+
+        if not module or not module:IsA("ModuleScript") then
+            StopDungeonHover()
+            Report("Waiting: Shared.ClassRange")
+            return
+        end
+
+        if module ~= hoverRangeModule then
+            hoverRangeModule = module
+            hoverRange = nil
+            hoverRangeError = nil
+
+            local ok, result = pcall(require, module)
+
+            -- require อาจ Yield ต้องตรวจสิทธิ์รอบปัจจุบันใหม่
+            if not CanDungeonHover(myRevision) then
+                StopDungeonHover()
+                return
+            end
+
+            if ok and type(result) == "table"
+                and type(result.Attack) == "function"
+                and type(result.StopInside) == "function" then
+                hoverRange = result
+            else
+                hoverRangeError = tostring(result)
+            end
+        end
+
+        if not hoverRange then
+            StopDungeonHover()
+            Report("Blocked: ClassRange " .. tostring(hoverRangeError))
+            return
+        end
+
+        if module.Parent ~= shared
+            or shared:FindFirstChild("ClassRange") ~= module then
+            StopDungeonHover()
+            return
+        end
+
+        -- ตัวละครอาจเปลี่ยนระหว่าง require
+        local currentHumanoid, currentRoot = Character()
+        if currentHumanoid ~= humanoid or currentRoot ~= root then
+            StopDungeonHover()
+            return
+        end
+
+        local tracker = LocalPlayer:FindFirstChild("CurrentTarget")
+        local monstersFolder = workspace:FindFirstChild("Monsters")
+
+        if not tracker or not tracker:IsA("ObjectValue")
+            or not monstersFolder then
+            StopDungeonHover()
+            Report("Waiting: Dungeon target references")
+            return
+        end
+
+        local model = dungeonAttack.Target
+
+        -- ปล่อยเป้าเมื่อถูกนำออกจากแมพ หรือยืนยันว่า HP หมดแล้ว
+        if model then
+            local hp = model:GetAttribute("HP")
+
+            if not model:IsDescendantOf(monstersFolder)
+                or (Number(hp) and hp <= 0) then
+                ResetDungeonAttack()
+                StopDungeonHover()
+                model = nil
+            end
+        end
+
+        if not model then
+            local function Living(candidate)
+                if typeof(candidate) ~= "Instance"
+                    or not candidate:IsA("Model")
+                    or not candidate:IsDescendantOf(monstersFolder)
+                    or not hoverCollection:HasTag(candidate, "Monster") then
+                    return false
+                end
+
+                local hp = candidate:GetAttribute("HP")
+                local part = candidate.PrimaryPart
+                    or candidate:FindFirstChild("HumanoidRootPart")
+
+                return Number(hp) and hp > 0
+                    and part ~= nil
+                    and part:IsA("BasePart")
+                    and part:IsDescendantOf(candidate)
+            end
+
+            -- รับเป้าที่ Native เลือกมาก่อน
+            if Living(tracker.Value) then
+                model = tracker.Value
+
+            elseif os.clock() >= dungeonAttack.NextSearchAt then
+                -- Poll สำรองเฉพาะตอนยังไม่มีเป้า
+                dungeonAttack.NextSearchAt = os.clock() + 1
+
+                local nearestDistance = math.huge
+
+                for candidate in pairs(dungeonAttack.Candidates) do
+                    if Living(candidate) then
+                        local candidatePart = candidate.PrimaryPart
+                            or candidate:FindFirstChild("HumanoidRootPart")
+
+                        local distance = (
+                            candidatePart.Position - root.Position
+                        ).Magnitude
+
+                        if distance < nearestDistance then
+                            nearestDistance = distance
+                            model = candidate
+                        end
+                    end
+                end
+            end
+
+            if not model then
+                StopDungeonHover()
+                Report("Waiting: live Dungeon monster")
+                return
+            end
+
+            dungeonAttack.Target = model
+        end
+
+        local hp = model:GetAttribute("HP")
+        local part = model.PrimaryPart
+            or model:FindFirstChild("HumanoidRootPart")
+
+        -- ข้อมูลไม่พร้อมให้รอตัวเดิม ไม่เปลี่ยนไปตัวอื่น
+        if not Number(hp)
+            or not part or not part:IsA("BasePart")
+            or not part:IsDescendantOf(model) then
+            StopDungeonHover()
+            Report("Waiting: locked monster data")
+            return
+        end
+
+        if hp <= 0 then
+            ResetDungeonAttack()
+            StopDungeonHover()
+            return
+        end
+
+        if tracker.Value ~= model then
+            local control = LocalPlayer:FindFirstChild("LumiLockTarget")
+
+            if not control or not control:IsA("BindableEvent") then
+                StopDungeonHover()
+                Report("Waiting: LumiLockTarget")
+                return
+            end
+
+            -- ส่งเมื่อเป้า/Control เปลี่ยนจริง
+            -- ถ้าส่งแล้วไม่มีผล จะรอยืนยัน ไม่ยิงซ้ำทุก Tick
+            if dungeonAttack.LockControl ~= control
+                or dungeonAttack.RequestedTarget ~= model
+                or dungeonAttack.SeenTarget ~= tracker.Value then
+
+                dungeonAttack.LockControl = control
+                dungeonAttack.RequestedTarget = model
+                dungeonAttack.SeenTarget = tracker.Value
+
+                control:Fire(model)
+            end
+
+            if tracker.Value ~= model then
+                StopDungeonHover()
+                Report("Waiting: native target lock confirmation")
+                return
+            end
+        end
+
+        dungeonAttack.SeenTarget = tracker.Value
+
+        local range = hoverRange.Attack(LocalPlayer)
+        local inside = hoverRange.StopInside(LocalPlayer)
+        local radius = model:GetAttribute("Radius")
+
+        -- ตรงกับค่า Default ใน Native ที่แนบมา
+        if radius == nil then
+            radius = 1.5
+        end
+
+        if not Number(range) or not Number(inside)
+            or not Number(radius)
+            or inside < 0 or radius < 0
+            or range <= inside then
+            StopDungeonHover()
+            Report("Blocked: invalid Dungeon attack range")
+            return
+        end
+
+        local attackLimit = range - inside
+        local centerLimit = attackLimit + radius
+        local reach = centerLimit - DUNGEON_RANGE_MARGIN
+
+        if reach <= 0 then
+            StopDungeonHover()
+            Report("Blocked: insufficient hover clearance")
+            return
+        end
+
+        if dungeonHover and (
+            dungeonHover.Root ~= root
+            or dungeonHover.Humanoid ~= humanoid
+            or not dungeonHover.Position.Parent
+            or not dungeonHover.Orientation.Parent
+            or not dungeonHover.Attachment.Parent
+        ) then
+            StopDungeonHover()
+        end
+
+        -- อ่านทิศปัจจุบันทุกครั้ง ไม่ล็อกเป็นทิศโลกเหมือนเดิม
+        local look = part.CFrame.LookVector
+        local rear = Vector3.new(-look.X, 0, -look.Z)
+
+        if rear.Magnitude <= 0.01 then
+            StopDungeonHover()
+            Report("Waiting: locked monster facing")
+            return
+        end
+
+        local direction = rear.Unit
+
+        local height = math.min(
+            DUNGEON_HOVER_HEIGHT,
+            reach * 0.4
+        )
+
+        local rearDistance = math.sqrt(
+            math.max(0, reach * reach - height * height)
+        )
+
+        local destination = part.Position
+            + direction * rearDistance
+            + Vector3.new(0, height, 0)
+
+        local targetWall = workspace:Raycast(
+            part.Position,
+            destination - part.Position,
+            hoverWallParams
+        )
+
+        local travelWall
+        local displacement = destination - root.Position
+
+        if displacement.Magnitude > 0.01 then
+            travelWall = workspace:Raycast(
+                root.Position,
+                displacement,
+                hoverWallParams
+            )
+        end
+
+        if targetWall or travelWall then
+            StopDungeonHover()
+            Report("Waiting: rear blocked; keeping " .. model.Name)
+            return
+        end
+
+        hoverSideTarget = model
+        hoverSideRoot = root
+        hoverSideDirection = direction
+
+        if not CanDungeonHover(myRevision)
+            or tracker.Value ~= model
+            or not model:IsDescendantOf(monstersFolder)
+            or humanoid.RootPart ~= root then
+            StopDungeonHover()
+            return
+        end
+
+        local latestHP = model:GetAttribute("HP")
+        if not Number(latestHP) or latestHP <= 0 then
+            StopDungeonHover()
+            return
+        end
+
+        local facing = CFrame.lookAt(
+            destination,
+            Vector3.new(
+                part.Position.X,
+                destination.Y,
+                part.Position.Z
+            )
+        )
+
+        if not dungeonHover then
+            local attachment = Instance.new("Attachment")
+            attachment.Name = "ZeroXDungeonHoverAttachment"
+            attachment.Parent = root
+
+            local alignment = Instance.new("AlignPosition")
+            alignment.Name = "ZeroXDungeonHoverPosition"
+            alignment.Mode = Enum.PositionAlignmentMode.OneAttachment
+            alignment.Attachment0 = attachment
+            alignment.ApplyAtCenterOfMass = true
+            alignment.RigidityEnabled = false
+            alignment.Responsiveness = 35
+            alignment.MaxVelocity = 60
+            alignment.MaxForce = math.max(
+                10000,
+                root.AssemblyMass * math.max(workspace.Gravity, 1) * 40
+            )
+            alignment.Position = destination
+            alignment.Parent = root
+
+            local orientation = Instance.new("AlignOrientation")
+            orientation.Name = "ZeroXDungeonHoverOrientation"
+            orientation.Mode = Enum.OrientationAlignmentMode.OneAttachment
+            orientation.Attachment0 = attachment
+            orientation.RigidityEnabled = false
+            orientation.Responsiveness = 35
+            orientation.MaxTorque = 500000
+            orientation.MaxAngularVelocity = 20
+            orientation.CFrame = facing.Rotation
+            orientation.Parent = root
+
+            dungeonHover = {
+                Root = root,
+                Humanoid = humanoid,
+                AutoRotate = humanoid.AutoRotate,
+                Attachment = attachment,
+                Position = alignment,
+                Orientation = orientation,
+            }
+        end
+
+        humanoid.AutoRotate = false
+        dungeonHover.Position.Position = destination
+        dungeonHover.Orientation.CFrame = facing.Rotation
+
+        -- facing มีตำแหน่งด้านหลังปัจจุบันและหันเข้าหามอนแล้ว
+        -- วาร์ปตามจุดใหม่ แล้วให้ AlignPosition ค้างระหว่างรอบ
+        root.CFrame = facing
+        root.AssemblyLinearVelocity = Vector3.zero
+        root.AssemblyAngularVelocity = Vector3.zero
+
+        local danger = JobAutomation.DungeonDanger
+
+        Report(
+            "Hovering: " .. model.Name
+                .. " | observed telegraphs only"
+                .. (
+                    danger and danger.HistoryUnknown
+                    and " | earlier hazards UNKNOWN"
+                    or ""
+                )
+        )
+    end
+
+    -- ปล่อยตัวล็อกเมื่อบริบทไม่รองรับ โดยไม่เปลี่ยน Toggle
+    local function CheckDungeonHoverContext()
+        local finished =
+            workspace:GetAttribute("PlaceRole") ~= "Dungeon"
+            or workspace:GetAttribute("DungeonState") ~= "running"
+            or LocalPlayer:GetAttribute("DungeonDowned") == true
+
+        if finished then
+            ResetDungeonAttack()
+            StopDungeonHover()
+            return
+        end
+
+        -- Native Auto อาจหยุดระหว่างหลบ/ใช้สกิล
+        -- พักเฉพาะ Hover โดยเก็บเป้าหมายเดิม
+        if LocalPlayer:GetAttribute("AutoOn") ~= true
+            or LocalPlayer.GameplayPaused then
+            StopDungeonHover()
+        end
+    end
+
+    Connect(
+        workspace:GetAttributeChangedSignal("DungeonState"),
+        CheckDungeonHoverContext
+    )
+
+    Connect(
+        workspace:GetAttributeChangedSignal("PlaceRole"),
+        CheckDungeonHoverContext
+    )
+
+    Connect(
+        LocalPlayer:GetAttributeChangedSignal("DungeonDowned"),
+        CheckDungeonHoverContext
+    )
+
+    Connect(
+        LocalPlayer:GetAttributeChangedSignal("AutoOn"),
+        CheckDungeonHoverContext
+    )
+
+    Connect(
+        LocalPlayer:GetPropertyChangedSignal("GameplayPaused"),
+        CheckDungeonHoverContext
+    )
+
     local function Release()
+        dungeonDodge = nil
+        ResetDungeonAttack()
+        StopDungeonHover()
         EndHold()
         StopMovement()
 
@@ -12008,6 +12875,271 @@ do
 
         Report("Waiting: native AutoOn=" .. tostring(wanted))
         return false
+    end
+
+    -- StepDungeonDodge = หลบเฉพาะเมื่อเปิด Auto Dodge Skill
+    -- true หมายถึงรอบนี้ให้ระบบหลบควบคุมต่อ ห้ามวาร์ปกลับไปตี
+    local function StepDungeonDodge()
+        local toggle = Options.ZeroXAutoDodgeBossSkill
+
+        if not toggle or toggle.Value ~= true then
+            if dungeonDodge then
+                dungeonDodge = nil
+                StopDungeonHover()
+            end
+            return false
+        end
+
+        local danger = JobAutomation.DungeonDanger
+        local humanoid, root = Character()
+
+        if not humanoid or not root then
+            StopDungeonHover()
+            Report("Dodge: waiting for character")
+            return true
+        end
+
+        if not danger or type(danger.Evaluate) ~= "function"
+            or type(danger.Events) ~= "table" then
+            StopDungeonHover()
+            NativeAuto(false)
+            Report("Dodge: waiting for Dungeon danger data")
+            return true
+        end
+
+        -- Evaluate จะล้าง Event ที่หมดอายุตามข้อมูลเดิม
+        local currentState, currentReason = danger.Evaluate(root.Position)
+
+        if currentState == "CLEAR_OF_OBSERVED"
+            and #danger.Events == 0 then
+
+            if dungeonDodge then
+                dungeonDodge = nil
+                StopDungeonHover()
+            end
+
+            -- กลับไปเปิด Native และตีเป้าหมายที่จำไว้
+            return false
+        end
+
+        if not dungeonDodge or dungeonDodge.Root ~= root then
+            StopDungeonHover()
+
+            dungeonDodge = {
+                Root = root,
+                Character = LocalPlayer.Character,
+                Point = nil,
+                SearchAt = nil,
+            }
+        end
+
+        -- หยุด Native เดิน/ตีระหว่างหลบ ไม่ปิด Toggle ของผู้ใช้
+        if not NativeAuto(false) then
+            return true
+        end
+
+        if currentState == "UNKNOWN" then
+            StopDungeonHover()
+            Report("Dodge blocked: " .. tostring(currentReason))
+            return true
+        end
+
+        local session = dungeonDodge
+        local myRevision = revision
+        local stand = humanoid.HipHeight + root.Size.Y / 2
+
+        if not Number(stand) or stand <= 0 then
+            Report("Dodge blocked: invalid character clearance")
+            return true
+        end
+
+        local excluded = { LocalPlayer.Character }
+
+        for _, name in ipairs({ "Monsters", "LumiBossFx" }) do
+            local instance = workspace:FindFirstChild(name)
+            if instance then
+                excluded[#excluded + 1] = instance
+            end
+        end
+
+        local floorParams = RaycastParams.new()
+        floorParams.FilterType = Enum.RaycastFilterType.Exclude
+        floorParams.FilterDescendantsInstances = excluded
+        floorParams.RespectCanCollide = true
+
+        -- ระยะค้นหาพื้นเป็น Budget ของสคริปต์ ไม่ใช่ขอบเขตเกม
+        local floorOriginHeight = stand + DUNGEON_HOVER_HEIGHT
+        local floorDepth = 96
+
+        local referenceFloor = workspace:Raycast(
+            root.Position,
+            Vector3.new(0, -floorDepth, 0),
+            floorParams
+        )
+
+        if not referenceFloor then
+            StopDungeonHover()
+            Report("Dodge: waiting for loaded floor")
+            return true
+        end
+
+        local function ValidatePoint(candidate)
+            local floorHit = workspace:Raycast(
+                candidate + Vector3.new(0, floorOriginHeight, 0),
+                Vector3.new(0, -floorDepth, 0),
+                floorParams
+            )
+
+            if not floorHit or floorHit.Normal.Y < 0.8 then
+                return nil
+            end
+
+            -- ไม่เลือกพื้นต่างระดับมากจากพื้นปัจจุบัน
+            if math.abs(
+                floorHit.Position.Y - referenceFloor.Position.Y
+            ) > stand then
+                return nil
+            end
+
+            local point = Vector3.new(
+                candidate.X,
+                floorHit.Position.Y + stand + DUNGEON_HOVER_HEIGHT,
+                candidate.Z
+            )
+
+            if danger.Evaluate(point) ~= "CLEAR_OF_OBSERVED" then
+                return nil
+            end
+
+            local displacement = point - root.Position
+
+            if displacement.Magnitude > 0.01
+                and workspace:Raycast(
+                    root.Position,
+                    displacement,
+                    hoverWallParams
+                ) then
+                return nil
+            end
+
+            return point
+        end
+
+        local destination = session.Point
+            and ValidatePoint(session.Point)
+
+        if not destination then
+            local now = os.clock()
+
+            -- จำกัดการค้นหา ไม่สร้าง Loop/Worker เพิ่ม
+            if session.SearchAt and now - session.SearchAt < 0.2 then
+                Report("Dodge: waiting to recheck geometry")
+                return true
+            end
+
+            session.SearchAt = now
+
+            local candidates = {}
+            local padding = math.max(root.Size.X, root.Size.Z) / 2 + 1
+
+            local function Offer(point)
+                if #candidates < 64 and typeof(point) == "Vector3" then
+                    candidates[#candidates + 1] = point
+                end
+            end
+
+            Offer(root.Position)
+
+            for _, event in ipairs(danger.Events) do
+                if #candidates >= 64 then break end
+
+                for _, zone in ipairs(event.Zones) do
+                    if #candidates >= 64 then break end
+
+                    if typeof(zone.Center) == "Vector3" then
+                        if zone.Safe == true then
+                            Offer(Vector3.new(
+                                zone.Center.X,
+                                root.Position.Y,
+                                zone.Center.Z
+                            ))
+                        elseif Number(zone.Radius) and zone.Radius >= 0 then
+                            -- จุดนอกวงครอบพื้นที่โจมตี
+                            for i = 0, 11 do
+                                local angle = i * math.pi * 2 / 12
+                                local radius = zone.Radius + padding
+
+                                Offer(Vector3.new(
+                                    zone.Center.X + math.cos(angle) * radius,
+                                    root.Position.Y,
+                                    zone.Center.Z + math.sin(angle) * radius
+                                ))
+                            end
+                        end
+                    end
+
+                    if typeof(zone.CFrame) == "CFrame"
+                        and Number(zone.Width) and zone.Width > 0
+                        and Number(zone.Length) and zone.Length > 0 then
+
+                        local x = zone.Width / 2 + padding
+                        local z = zone.Length / 2 + padding
+
+                        for _, offset in ipairs({
+                            Vector3.new(x, 0, 0),
+                            Vector3.new(-x, 0, 0),
+                            Vector3.new(0, 0, z),
+                            Vector3.new(0, 0, -z),
+                            Vector3.new(x, 0, z),
+                            Vector3.new(-x, 0, z),
+                            Vector3.new(x, 0, -z),
+                            Vector3.new(-x, 0, -z),
+                        }) do
+                            local point =
+                                zone.CFrame:PointToWorldSpace(offset)
+
+                            Offer(Vector3.new(
+                                point.X, root.Position.Y, point.Z
+                            ))
+                        end
+                    end
+                end
+            end
+
+            table.sort(candidates, function(a, b)
+                return (a - root.Position).Magnitude
+                    < (b - root.Position).Magnitude
+            end)
+
+            for _, candidate in ipairs(candidates) do
+                destination = ValidatePoint(candidate)
+                if destination then break end
+            end
+
+            session.Point = destination
+        end
+
+        if not destination then
+            StopDungeonHover()
+            Report("Dodge blocked: no point passed geometry / floor checks")
+            return true
+        end
+
+        if not alive or not enabled or not owner
+            or revision ~= myRevision
+            or dungeonDodge ~= session
+            or session.Character ~= LocalPlayer.Character
+            or humanoid.RootPart ~= root
+            or workspace:GetAttribute("PlaceRole") ~= "Dungeon"
+            or workspace:GetAttribute("DungeonState") ~= "running"
+            or LocalPlayer:GetAttribute("DungeonDowned") == true
+            or LocalPlayer.GameplayPaused then
+            return true
+        end
+
+        HoldDungeonDodgePoint(humanoid, root, destination)
+        Report("Dodging: holding outside observed skill zones")
+        return true
     end
 
     local function Empty(value)
@@ -12395,9 +13527,17 @@ do
             end
 
             if state == "running" then
-                if NativeSettings() and NativeAuto(true) then
-                    Report("Running: native Dungeon combat")
+                -- ให้การหลบตัดสินก่อนเปิด Native Auto กลับ
+                if StepDungeonDodge() then
+                    return
                 end
+
+                if not NativeSettings() or not NativeAuto(true) then
+                    StopDungeonHover()
+                    return
+                end
+
+                StepDungeonHover()
                 return
             end
 
@@ -12606,6 +13746,9 @@ do
     )
 
     Connect(LocalPlayer.CharacterRemoving, function()
+        dungeonDodge = nil
+        ResetDungeonAttack()
+        StopDungeonHover()
         EndHold()
         StopMovement()
     end)
@@ -12623,7 +13766,13 @@ do
                 end
             end
 
-            task.wait(0.5)
+            local combatTick = enabled
+                and owner
+                and not fault
+                and workspace:GetAttribute("PlaceRole") == "Dungeon"
+                and workspace:GetAttribute("DungeonState") == "running"
+
+            task.wait(combatTick and 0.05 or 0.5)
         end
     end)
 
@@ -12632,6 +13781,8 @@ do
         enabled = false
         revision += 1
         Release()
+
+        table.clear(dungeonAttack.Candidates)
 
         if promptConnection then
             promptConnection:Disconnect()
