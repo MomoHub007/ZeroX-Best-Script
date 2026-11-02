@@ -3864,6 +3864,33 @@ do
                     and math.abs(point.Y) <= halfSize.Y
                     and math.abs(point.Z) <= halfSize.Z
                 then
+                    if workspace:GetAttribute("Mode") == "zodiacraid" then
+                        local segment = workspace:GetAttribute("Segment")
+                        local number
+
+                        if segment == "level1" then
+                            local route = tonumber(
+                                area.Name:match("^Route(%d+)$")
+                            )
+
+                            if route and route >= 1 and route <= 5 then
+                                number = tostring(route)
+                            end
+
+                        elseif segment == "level2" and area.Name == "1" then
+                            number = "6"
+                        end
+
+                        if number then
+                            return {
+                                Name = number,
+                                Position = area.Position,
+                                Size = area.Size,
+                                CFrame = area.CFrame,
+                            }
+                        end
+                    end
+
                     if isInRaid
                         and isInRaid()
                         and CurrentAreaName
@@ -3952,6 +3979,10 @@ do
     end
 
     local function getAreaFromStatus(text)
+        if workspace:GetAttribute("Mode") == "zodiacraid" then
+            return getLiveFarmArea()
+        end
+
         if type(text) ~= "string" then
             return nil
         end
@@ -3974,6 +4005,28 @@ do
             or not AreasFolder
             or not AreasFolder.Parent
         then
+            return nil
+        end
+
+        if workspace:GetAttribute("Mode") == "zodiacraid" then
+            local index = tonumber(areaName)
+
+            if not index
+                or index % 1 ~= 0
+                or index < 1
+                or index > 6
+            then
+                return nil
+            end
+
+            -- Mapping ยืนยันจาก constants.maps.zodiacraid
+            local zone = index == 6 and "1" or "Route" .. index
+            local part = AreasFolder:FindFirstChild(zone)
+
+            if part and part:IsA("BasePart") then
+                return part
+            end
+
             return nil
         end
 
@@ -4200,8 +4253,180 @@ do
         shadowking = true,
     }
 
+    function RuntimeFix.zodiacMovementBlocked()
+        if workspace:GetAttribute("Mode") ~= "zodiacraid" then
+            return false
+        end
+
+        local root = getCharacterRoot()
+
+        return workspace:GetAttribute("SegmentSwitching") == true
+            or not root
+            or not root.Parent
+            or root.Anchored
+    end
+
+    function RuntimeFix.readZodiacEnemy(enemy)
+        if not enemy or not enemy:IsA("Model") then
+            return nil
+        end
+
+        local enemies = workspace:FindFirstChild("enemies")
+        local id = tonumber(enemy.Name)
+
+        if not enemies or enemy.Parent ~= enemies or not id then
+            return nil
+        end
+
+        if not RuntimeFix.ZodiacEnemyModules then
+            if os.clock() < (RuntimeFix.ZodiacModuleRetryAt or 0) then
+                return nil
+            end
+
+            RuntimeFix.ZodiacModuleRetryAt = os.clock() + 1
+
+            local ok, modules = pcall(function()
+                local store = RuntimeFix.requireModule(
+                    ReplicatedStorage,
+                    {"game", "stores", "enemyStore"}
+                )
+
+                local definitions = RuntimeFix.requireModule(
+                    ReplicatedStorage,
+                    {"global", "constants", "enemies"}
+                )
+
+                assert(
+                    store and store.store and store.store.state,
+                    "Zodiac enemyStore unavailable"
+                )
+                assert(
+                    type(store.store.state.get) == "function",
+                    "Zodiac enemyStore.state.get unavailable"
+                )
+                assert(
+                    definitions
+                        and type(definitions.enemiesByName) == "table",
+                    "Zodiac enemiesByName unavailable"
+                )
+
+                return {
+                    State = store.store.state,
+                    Definitions = definitions.enemiesByName,
+                }
+            end)
+
+            if not ok then
+                if os.clock() >= (RuntimeFix.ZodiacReadWarnAt or 0) then
+                    RuntimeFix.ZodiacReadWarnAt = os.clock() + 5
+                    AutoSkillWarn("[ZodiacRaid] " .. tostring(modules))
+                end
+                return nil
+            end
+
+            RuntimeFix.ZodiacEnemyModules = modules
+        end
+
+        local modules = RuntimeFix.ZodiacEnemyModules
+
+        -- อ่าน Entry สด ไม่ Cache ข้อมูลสุขภาพหรือโล่ของมอน
+        local ok, result = pcall(function()
+            local entry = modules.State:get(id)
+
+            if not entry then
+                return nil
+            end
+
+            local name = entry.name:get()
+            local health = entry.health:get()
+            local definition = modules.Definitions[name]
+
+            if type(name) ~= "string"
+                or type(health) ~= "number"
+                or health ~= health
+                or type(definition) ~= "table"
+                or typeof(entry.position:get()) ~= "Vector3"
+            then
+                return nil
+            end
+
+            return {
+                Health = health,
+                Boss = definition.boss == true,
+                Eligible = health > 0
+                    and entry.guardedAt:get() == nil
+                    and entry.stuns:get("guard") == nil
+                    and entry.stuns:get("bossIntro") == nil,
+            }
+        end)
+
+        if not ok then
+            if os.clock() >= (RuntimeFix.ZodiacReadWarnAt or 0) then
+                RuntimeFix.ZodiacReadWarnAt = os.clock() + 5
+                AutoSkillWarn("[ZodiacRaid] Enemy read: " .. tostring(result))
+            end
+            return nil
+        end
+
+        return result
+    end
+
+    function RuntimeFix.zodiacCanAttack(enemy)
+        if workspace:GetAttribute("Mode") ~= "zodiacraid" then
+            return true
+        end
+
+        if RuntimeFix.zodiacMovementBlocked()
+            or AutoFarmSession.Cancelled
+            or not AutoFarmEnabled
+            or RuntimeFix.EndRoundPaused
+            or PlayerGui:GetAttribute("EndScreenActive") == true
+        then
+            return false
+        end
+
+        local area, wave, status = RuntimeFix.readZodiacState()
+
+        if not area
+            or not wave
+            or wave <= 0
+            or status ~= "active"
+            or tostring(CurrentAreaName) ~= area
+        then
+            return false
+        end
+
+        local root = getEnemyRoot(enemy)
+        local zone = getAreaPart(area)
+        local data = RuntimeFix.readZodiacEnemy(enemy)
+
+        if not root or not zone or not data or not data.Eligible then
+            return false
+        end
+
+        local point = zone.CFrame:PointToObjectSpace(root.Position)
+        local half = zone.Size / 2
+
+        if math.abs(point.X) > half.X
+            or math.abs(point.Y) > half.Y
+            or math.abs(point.Z) > half.Z
+        then
+            return false
+        end
+
+        return not (
+            data.Boss
+            and workspace:GetAttribute("RaidBossGuarded") == true
+        )
+    end
+
     local function isEnemyBoss(enemy: Instance): boolean
         if not enemy then return false end
+
+        if workspace:GetAttribute("Mode") == "zodiacraid" then
+            local data = RuntimeFix.readZodiacEnemy(enemy)
+            return data ~= nil and data.Boss
+        end
 
         if isFateRaid() then
             local _, boss = readFateEnemy(enemy)
@@ -4350,7 +4575,9 @@ do
                         end
                     end
 
-                    if isValid then
+                    if isValid
+                        and RuntimeFix.zodiacCanAttack(enemy)
+                    then
                         local distance =
                             (characterRoot.Position - enemyRoot.Position).Magnitude
                         local isBoss
@@ -4426,6 +4653,15 @@ do
     RuntimeFix.TravelSpeed = 80 -- studs ต่อวินาที
 
     function RuntimeFix.tweenRootTo(targetCFrame, canContinue)
+        local zodiacTravel =
+            workspace:GetAttribute("Mode") == "zodiacraid"
+
+        local zodiacSegment = workspace:GetAttribute("Segment")
+
+        if RuntimeFix.zodiacMovementBlocked() then
+            return false
+        end
+
         local character = getCharacter()
         local root = getCharacterRoot()
         local humanoid = getHumanoid()
@@ -4573,6 +4809,14 @@ do
                 and humanoid.Health > 0
                 and os.clock() < deadline
             do
+                if zodiacTravel and (
+                    workspace:GetAttribute("Mode") ~= "zodiacraid"
+                    or workspace:GetAttribute("Segment") ~= zodiacSegment
+                    or RuntimeFix.zodiacMovementBlocked()
+                ) then
+                    break
+                end
+
                 if canContinue and not canContinue() then
                     break
                 end
@@ -4753,8 +4997,14 @@ do
         stopHover()
 
         local wasCanCollide = root.CanCollide
-        local targetPosition =
-            areaPart.Position + Vector3.new(0, AREA_HEIGHT_OFFSET, 0)
+        local targetPosition
+
+        if workspace:GetAttribute("Mode") == "zodiacraid" then
+            targetPosition = root.Position
+        else
+            targetPosition =
+                areaPart.Position + Vector3.new(0, AREA_HEIGHT_OFFSET, 0)
+        end
 
         humanoid:Move(Vector3.zero, false)
         humanoid.AutoRotate = true
@@ -4810,6 +5060,10 @@ do
     --==================================================
 
     local function startHover(enemy, hoverHeight, retreatMode)
+        if not RuntimeFix.zodiacCanAttack(enemy) then
+            return false
+        end
+
         local character = getCharacter()
         local root = getCharacterRoot()
         local humanoid = getHumanoid()
@@ -5040,6 +5294,10 @@ do
                 local arrived = RuntimeFix.tweenRootTo(
                     CFrame.new(initialPosition) * initialFacing,
                     function()
+                        if not RuntimeFix.zodiacCanAttack(enemy) then
+                            return false
+                        end
+
                         local targetRoot = getEnemyRoot(enemy)
 
                         if (
@@ -5182,6 +5440,11 @@ do
                 and humanoid.Health > 0
                 and RuntimeFix.pauseFarmForSkill()
             then
+                return
+            end
+
+            if not RuntimeFix.zodiacCanAttack(enemy) then
+                stopHover()
                 return
             end
 
@@ -5348,6 +5611,10 @@ do
     --==================================================
 
     local function teleportToArea(areaName)
+        if workspace:GetAttribute("Mode") == "zodiacraid" then
+            return false
+        end
+
         local area = getAreaPart(areaName)
         local character = getCharacter()
 
@@ -5810,6 +6077,10 @@ do
     end
 
     local function attackEnemy()
+        if not RuntimeFix.zodiacCanAttack(CurrentTarget) then
+            return
+        end
+
         if not CurrentTarget then
             return
         end
@@ -7411,6 +7682,10 @@ do
     }
 
     local function useReadySkills(worldPosition)
+        if not RuntimeFix.zodiacCanAttack(CurrentTarget) then
+            return
+        end
+
         if AutoFarmSession.Cancelled
             or not AutoFarmEnabled
             or not AZEnabled("Combat", "AutoSkills")
@@ -7657,7 +7932,689 @@ do
         return true
     end
 
+    function RuntimeFix.zodiacStatus(message)
+        RuntimeFix.FarmGameplayWait = message
+
+        if RuntimeFix.ZodiacMessage ~= message then
+            RuntimeFix.ZodiacMessage = message
+            AutoSkillWarn("[ZodiacRaid] " .. message)
+        end
+    end
+
+    function RuntimeFix.readZodiacState()
+        local area = getLiveFarmArea()
+
+        if not area or not farmRunStore then
+            return nil
+        end
+
+        -- จำกัด pcall เฉพาะการอ่าน Store
+        local ok, wave, status = pcall(function()
+            local state = farmRunStore.store.state
+            return state.wave:get(), state.status:get()
+        end)
+
+        if not ok
+            or type(wave) ~= "number"
+            or wave ~= wave
+            or wave < 0
+            or wave % 1 ~= 0
+            or type(status) ~= "string"
+        then
+            return nil
+        end
+
+        return area, wave, status
+    end
+
+    function RuntimeFix.zodiacHasLivingEnemies(area)
+        local enemies = workspace:FindFirstChild("enemies")
+        if not enemies then
+            return nil
+        end
+
+        local zone = getAreaPart(area)
+        if not zone or not zone:IsA("BasePart") then
+            return nil
+        end
+
+        local half = zone.Size / 2
+        local cf = zone.CFrame
+        local children = enemies:GetChildren()
+
+        for _, enemy in ipairs(children) do
+            if enemy:IsA("Model") then
+                local root = getEnemyRoot(enemy)
+                if not root then
+                    -- Model in enemies but root part missing or still streaming: Unknown
+                    return nil
+                end
+
+                local pt = cf:PointToObjectSpace(root.Position)
+                if math.abs(pt.X) <= half.X
+                    and math.abs(pt.Y) <= half.Y
+                    and math.abs(pt.Z) <= half.Z
+                then
+                    local humanoid = enemy:FindFirstChildOfClass("Humanoid")
+                    local data = RuntimeFix.readZodiacEnemy(enemy)
+
+                    local storeHealth = data and data.Health
+                    local humanoidHealth = humanoid and humanoid.Health
+
+                    local storeKnown = type(storeHealth) == "number"
+                        and storeHealth == storeHealth
+
+                    local humanoidKnown =
+                        type(humanoidHealth) == "number"
+                        and humanoidHealth == humanoidHealth
+
+                    -- Any positive health evidence (including guarded or bossIntro) counts as living
+                    if (storeKnown and storeHealth > 0)
+                        or (humanoidKnown and humanoidHealth > 0)
+                    then
+                        return true
+                    end
+
+                    -- Model in zone but health cannot be verified from store or Humanoid: Unknown
+                    if not storeKnown and not humanoidKnown then
+                        return nil
+                    end
+                end
+            end
+        end
+
+        return false
+    end
+
+    function RuntimeFix.zodiacWheelStep(area, wave, status)
+        if workspace:GetAttribute("Mode") ~= "zodiacraid"
+            or status ~= "active"
+            or RuntimeFix.zodiacMovementBlocked()
+            or AutoFarmSession.Cancelled
+            or not AutoFarmEnabled
+            or RuntimeFix.EndRoundPaused
+            or PlayerGui:GetAttribute("EndScreenActive") == true
+        then
+            return false
+        end
+
+        local segment = workspace:GetAttribute("Segment")
+        local pending = RuntimeFix.ZodiacWheelPending
+
+        -- Invalidate pending on area or segment changes
+        if pending and (
+            pending.Area ~= area
+            or pending.Segment ~= segment
+        ) then
+            RuntimeFix.ZodiacWheelPending = nil
+            pending = nil
+        end
+
+        local world = workspace:FindFirstChild("World")
+        local map = world and world:FindFirstChild("Map")
+        local wheelName = workspace:GetAttribute("ZodiacWheelName")
+
+        if type(wheelName) ~= "string" or wheelName == "" then
+            return false
+        end
+
+        local wheel = map and map:FindFirstChild(wheelName)
+        local stand = wheel and wheel:FindFirstChild("Stand")
+        local point = stand and stand:FindFirstChild("SpinPoint")
+        local prompt = point and point:FindFirstChild("SpinPrompt")
+
+        local function validateTargetPrompt(expectedAction)
+            local currentWorld = workspace:FindFirstChild("World")
+            local currentMap = currentWorld and currentWorld:FindFirstChild("Map")
+            local currentWheelName = workspace:GetAttribute("ZodiacWheelName")
+            if type(currentWheelName) ~= "string" or currentWheelName == "" then
+                return nil, "Invalid ZodiacWheelName"
+            end
+
+            local currentWheel = currentMap and currentMap:FindFirstChild(currentWheelName)
+            local currentStand = currentWheel and currentWheel:FindFirstChild("Stand")
+            local currentPoint = currentStand and currentStand:FindFirstChild("SpinPoint")
+            local currentPrompt = currentPoint and currentPoint:FindFirstChild("SpinPrompt")
+
+            if not currentWorld
+                or not currentMap
+                or not currentWheel
+                or not currentWheel:IsA("Model")
+                or not currentStand
+                or not currentStand:IsA("BasePart")
+                or not currentPoint
+                or not currentPoint:IsA("Attachment")
+                or not currentPrompt
+                or not currentPrompt:IsA("ProximityPrompt")
+            then
+                return nil, "Hierarchy invalid or changed"
+            end
+
+            if not currentPrompt.Enabled then
+                return nil, "Prompt disabled"
+            end
+
+            if expectedAction and currentPrompt.ActionText ~= expectedAction then
+                return nil, "ActionText mismatch"
+            end
+
+            if currentPrompt.HoldDuration ~= 0 then
+                return nil, "HoldDuration changed"
+            end
+
+            return currentPrompt
+        end
+
+        local function validateActivationState(expectedAction)
+            local currentArea, currentWave, currentStatus = RuntimeFix.readZodiacState()
+            if currentArea ~= area or currentStatus ~= "active" then
+                return false, "Area or status changed"
+            end
+
+            if AutoFarmSession.Cancelled
+                or not AutoFarmEnabled
+                or RuntimeFix.EndRoundPaused
+                or PlayerGui:GetAttribute("EndScreenActive") == true
+                or RuntimeFix.zodiacMovementBlocked()
+                or workspace:GetAttribute("Mode") ~= "zodiacraid"
+                or workspace:GetAttribute("Segment") ~= segment
+            then
+                return false, "Movement or farm session blocked"
+            end
+
+            local currentRoot = getCharacterRoot()
+            local currentHumanoid = getHumanoid()
+            if not currentRoot
+                or not currentRoot.Parent
+                or not currentHumanoid
+                or currentHumanoid.Health <= 0
+                or currentRoot.Anchored
+            then
+                return false, "Character invalid or dead"
+            end
+
+            local validPrompt, promptErr = validateTargetPrompt(expectedAction)
+            if not validPrompt then
+                return false, promptErr
+            end
+
+            local currentDist = (currentRoot.Position - validPrompt.Parent.WorldPosition).Magnitude
+            if currentDist > validPrompt.MaxActivationDistance then
+                return false, "Out of activation distance"
+            end
+
+            return true, validPrompt
+        end
+
+        local root = getCharacterRoot()
+        local humanoid = getHumanoid()
+        if not root or not root.Parent or not humanoid or humanoid.Health <= 0 then
+            return true
+        end
+
+        -- Verified approach position: AreaEntry within activation range
+        local entries = world and world:FindFirstChild("AreaEntries")
+        local entry = entries and entries:FindFirstChild(area)
+        local targetPosition = nil
+
+        if entry and entry:IsA("BasePart") and point and point:IsA("Attachment") and prompt and prompt:IsA("ProximityPrompt") then
+            local dist = (entry.Position - point.WorldPosition).Magnitude
+            if dist <= prompt.MaxActivationDistance - 2 then
+                targetPosition = entry.Position
+            end
+        end
+
+        local hasLiving = RuntimeFix.zodiacHasLivingEnemies(area)
+
+        -- 1. Reconcile Existing Pending Transaction
+        if pending then
+            if pending.Prompt ~= prompt then
+                RuntimeFix.zodiacStatus("Wheel เปลี่ยน Instance: พักส่งซ้ำ รอยืนยัน State")
+                return true
+            end
+
+            -- Check if prompt ActionText transitioned to "Stop"
+            if prompt and prompt:IsA("ProximityPrompt") and prompt.Enabled and prompt.ActionText == "Stop" then
+                if pending.State == "SpinRequested" or pending.State == "StopReady" then
+                    pending.State = "StopReady"
+
+                    local distance = (root.Position - point.WorldPosition).Magnitude
+                    if distance > prompt.MaxActivationDistance - 2 then
+                        -- Out-of-range Stop: Approach verified AreaEntry
+                        if not targetPosition then
+                            RuntimeFix.zodiacStatus("ไม่พบ AreaEntry ในระยะ StopPrompt: พักเคลื่อนที่")
+                            return true
+                        end
+
+                        RuntimeFix.zodiacStatus("เคลื่อนที่เข้าหาระยะ StopPrompt")
+                        local generation = RuntimeFix.FarmGeneration
+                        local function checkAliveForStopApproach()
+                            if AutoFarmSession.Cancelled
+                                or not AutoFarmEnabled
+                                or RuntimeFix.FarmGeneration ~= generation
+                                or RuntimeFix.zodiacMovementBlocked()
+                                or workspace:GetAttribute("Mode") ~= "zodiacraid"
+                                or workspace:GetAttribute("Segment") ~= segment
+                                or getCharacterRoot() ~= root
+                                or not humanoid
+                                or humanoid.Health <= 0
+                            then
+                                return false
+                            end
+
+                            local liveArea, _, liveStatus = RuntimeFix.readZodiacState()
+                            if liveArea ~= area or liveStatus ~= "active" then
+                                return false
+                            end
+
+                            local validPrompt = validateTargetPrompt("Stop")
+                            if not validPrompt then
+                                return false
+                            end
+
+                            local currentEntries = workspace:FindFirstChild("World") and workspace.World:FindFirstChild("AreaEntries")
+                            local currentEntry = currentEntries and currentEntries:FindFirstChild(area)
+                            if not currentEntry or currentEntry ~= entry or currentEntry.Position ~= targetPosition then
+                                return false
+                            end
+
+                            return true
+                        end
+
+                        local arrived = RuntimeFix.tweenRootTo(CFrame.new(targetPosition) * root.CFrame.Rotation, checkAliveForStopApproach)
+                        if not arrived then
+                            return true
+                        end
+                    end
+
+                    -- Thorough re-validation after tween yield before calling fireproximityprompt
+                    local okActivation, validatedOrErr = validateActivationState("Stop")
+                    if okActivation and typeof(fireproximityprompt) == "function" and pending.State ~= "StopRequested" then
+                        pending.State = "StopRequested"
+                        pending.ObserveUntil = os.clock() + 10
+
+                        local okCall, callErr = pcall(function()
+                            fireproximityprompt(validatedOrErr, 0)
+                        end)
+                        if not okCall then
+                            pending.Error = tostring(callErr)
+                            AutoSkillWarn("[ZodiacRaid] Stop request: " .. tostring(callErr))
+                        end
+                        RuntimeFix.zodiacStatus("ส่ง Stop แล้ว: รอยืนยันผลลัพธ์")
+                        return true
+                    elseif not okActivation then
+                        RuntimeFix.zodiacStatus("Stop readiness เปลี่ยนหลัง yield: " .. tostring(validatedOrErr))
+                        return true
+                    end
+                end
+            elseif not prompt or not prompt:IsA("ProximityPrompt") or not prompt.Enabled or (pending.State == "StopRequested" and prompt.ActionText == "Spin") then
+                -- Native signal indicating outcome locked / wave initiated / prompt closed
+                pending.CycleClosed = true
+            end
+
+            -- Combat handoff: Return false to let independent combat run as soon as cycle closed and wave or enemies arrive
+            if pending.CycleClosed and (hasLiving == true or (wave and wave > 0)) then
+                RuntimeFix.ZodiacWheelPending = nil
+                pending = nil
+                return false
+            end
+
+            -- Rearm for new spin only when native cycle closed, prompt re-enabled with "Spin", and no living enemies remain
+            if pending and pending.CycleClosed and prompt and prompt:IsA("ProximityPrompt") and prompt.Enabled and prompt.ActionText == "Spin" and hasLiving == false then
+                RuntimeFix.ZodiacWheelPending = nil
+                pending = nil
+            end
+
+            if pending then
+                local message
+                if pending.Error then
+                    message = "การโต้ตอบมี Error: " .. tostring(pending.Error)
+                elseif os.clock() >= (pending.ObserveUntil or 0) then
+                    message = "Wheel Blocked/Unknown: รอยืนยัน Native State (" .. tostring(pending.State) .. ")"
+                elseif pending.State == "StopRequested" then
+                    message = "ส่ง Stop แล้ว: รอยืนยันผลลัพธ์"
+                elseif pending.State == "SpinRequested" then
+                    message = "ส่ง Spin แล้ว: รอสถานะ Stop"
+                else
+                    message = "Wheel อยู่ในระหว่างดำเนินการ: รอสถานะถัดไป"
+                end
+                RuntimeFix.zodiacStatus(message)
+                return true
+            end
+        end
+
+        -- 2. New Spin Branch
+        if hasLiving == true then
+            return false
+        elseif hasLiving == nil then
+            RuntimeFix.zodiacStatus("รอข้อมูลศัตรูใน Arena ชัดเจน")
+            return true
+        end
+
+        if not prompt or not prompt:IsA("ProximityPrompt") or not prompt.Enabled then
+            return false
+        end
+
+        if not targetPosition then
+            RuntimeFix.zodiacStatus("ไม่มี AreaEntry ในระยะเปิดใช้งาน Wheel: พักการหมุน")
+            return true
+        end
+
+        local distance = (root.Position - point.WorldPosition).Magnitude
+
+        -- Approach verified AreaEntry if not yet in range
+        if distance > prompt.MaxActivationDistance - 2 then
+            RuntimeFix.zodiacStatus("เคลื่อนที่เข้าหาระยะ Wheel interaction")
+            local generation = RuntimeFix.FarmGeneration
+            local function checkAliveForSpinApproach()
+                if AutoFarmSession.Cancelled
+                    or not AutoFarmEnabled
+                    or RuntimeFix.FarmGeneration ~= generation
+                    or RuntimeFix.zodiacMovementBlocked()
+                    or workspace:GetAttribute("Mode") ~= "zodiacraid"
+                    or workspace:GetAttribute("Segment") ~= segment
+                    or getCharacterRoot() ~= root
+                    or not humanoid
+                    or humanoid.Health <= 0
+                then
+                    return false
+                end
+
+                local liveArea, _, liveStatus = RuntimeFix.readZodiacState()
+                if liveArea ~= area or liveStatus ~= "active" then
+                    return false
+                end
+
+                -- Stop approach immediately if living enemies appear or arena state becomes Unknown
+                local liveHasLiving = RuntimeFix.zodiacHasLivingEnemies(area)
+                if liveHasLiving ~= false then
+                    return false
+                end
+
+                local validPrompt = validateTargetPrompt("Spin")
+                if not validPrompt then
+                    return false
+                end
+
+                local currentEntries = workspace:FindFirstChild("World") and workspace.World:FindFirstChild("AreaEntries")
+                local currentEntry = currentEntries and currentEntries:FindFirstChild(area)
+                if not currentEntry or currentEntry ~= entry or currentEntry.Position ~= targetPosition then
+                    return false
+                end
+
+                return true
+            end
+
+            local arrived = RuntimeFix.tweenRootTo(CFrame.new(targetPosition) * root.CFrame.Rotation, checkAliveForSpinApproach)
+            if not arrived then
+                return true
+            end
+        end
+
+        if typeof(fireproximityprompt) ~= "function" then
+            RuntimeFix.zodiacStatus("Executor ไม่มี fireproximityprompt: พัก Auto Spin")
+            return true
+        end
+
+        -- Re-validate thoroughly after yield before calling fireproximityprompt
+        if prompt.ActionText == "Spin" then
+            local okActivation, validatedOrErr = validateActivationState("Spin")
+            local freshHasLiving = RuntimeFix.zodiacHasLivingEnemies(area)
+
+            if not okActivation or freshHasLiving ~= false then
+                RuntimeFix.zodiacStatus("Spin readiness เปลี่ยนหลัง yield: " .. tostring(validatedOrErr))
+                return true
+            end
+
+            local request = {
+                Area = area,
+                Segment = segment,
+                Prompt = validatedOrErr,
+                State = "SpinRequested",
+                CycleClosed = false,
+                ObserveUntil = os.clock() + 10,
+            }
+
+            RuntimeFix.ZodiacWheelPending = request
+
+            local okCall, callErr = pcall(function()
+                fireproximityprompt(validatedOrErr, 0)
+            end)
+
+            if not okCall then
+                request.Error = tostring(callErr)
+                AutoSkillWarn("[ZodiacRaid] Spin request: " .. tostring(callErr))
+            end
+
+            RuntimeFix.zodiacStatus(okCall and "ส่ง Spin แล้ว: รอสถานะ Stop" or "ส่ง Spin มี Error: รอตรวจผล ไม่ส่งซ้ำ")
+            return true
+        elseif prompt.ActionText == "Stop" then
+            local okActivation, validatedOrErr = validateActivationState("Stop")
+            if not okActivation then
+                RuntimeFix.zodiacStatus("Stop readiness เปลี่ยนหลัง yield: " .. tostring(validatedOrErr))
+                return true
+            end
+
+            local request = {
+                Area = area,
+                Segment = segment,
+                Prompt = validatedOrErr,
+                State = "StopRequested",
+                CycleClosed = false,
+                ObserveUntil = os.clock() + 10,
+            }
+            RuntimeFix.ZodiacWheelPending = request
+
+            local okCall, callErr = pcall(function()
+                fireproximityprompt(validatedOrErr, 0)
+            end)
+
+            if not okCall then
+                request.Error = tostring(callErr)
+                AutoSkillWarn("[ZodiacRaid] Direct Stop request: " .. tostring(callErr))
+            end
+
+            RuntimeFix.zodiacStatus(okCall and "ส่ง Stop แล้ว: รอยืนยันผลลัพธ์" or "ส่ง Stop มี Error: รอตรวจผล ไม่ส่งซ้ำ")
+            return true
+        end
+
+        return false
+    end
+
+    function RuntimeFix.zodiacTransition()
+        if RuntimeFix.zodiacMovementBlocked() then
+            stopHover()
+            RuntimeFix.ZodiacEntryHold = nil
+            RuntimeFix.zodiacStatus("รอ Native SegmentTransition")
+            return true
+        end
+
+        local area, wave, status = RuntimeFix.readZodiacState()
+
+        local waitingForFirstAmbush =
+            area == "1"
+            and wave == 0
+            and status == "waiting"
+            and workspace:GetAttribute("Segment") == "level1"
+
+        if not area
+            or (status ~= "active" and not waitingForFirstAmbush)
+        then
+            stopHover()
+            RuntimeFix.ZodiacEntryHold = nil
+            RuntimeFix.zodiacStatus("รอ State สำหรับเดิน Zodiac")
+            return true
+        end
+
+        local route = getAreaPart(area)
+
+        if not route then
+            stopHover()
+            RuntimeFix.ZodiacEntryHold = nil
+            RuntimeFix.zodiacStatus("รอ Route ของ Area " .. area)
+            return true
+        end
+
+        if RuntimeFix.zodiacWheelStep(area, wave, status) then
+            return true
+        end
+
+        if wave > 0 then
+            if RuntimeFix.ZodiacEntryHold then
+                stopHover()
+                RuntimeFix.ZodiacEntryHold = nil
+            end
+
+            RuntimeFix.FarmGameplayWait = nil
+            RuntimeFix.ZodiacMessage = nil
+            return false
+        end
+
+        local world = workspace:FindFirstChild("World")
+        local entries = world and world:FindFirstChild("AreaEntries")
+        local entry = entries and entries:FindFirstChild(area)
+        local root = getCharacterRoot()
+        local humanoid = getHumanoid()
+
+        if not entry
+            or not entry:IsA("BasePart")
+            or not root
+            or not root.Parent
+            or not humanoid
+            or humanoid.Health <= 0
+        then
+            stopHover()
+            RuntimeFix.ZodiacEntryHold = nil
+            RuntimeFix.zodiacStatus("รอ Character / AreaEntries." .. area)
+            return true
+        end
+
+        local generation = RuntimeFix.FarmGeneration
+        local destination = entry.Position
+        local segment = workspace:GetAttribute("Segment")
+
+        local function current()
+            if AutoFarmSession.Cancelled
+                or not AutoFarmEnabled
+                or RuntimeFix.FarmGeneration ~= generation
+                or workspace:GetAttribute("Mode") ~= "zodiacraid"
+                or RuntimeFix.zodiacMovementBlocked()
+                or workspace:GetAttribute("Segment") ~= segment
+                or RuntimeFix.EndRoundPaused
+                or PlayerGui:GetAttribute("EndScreenActive") == true
+                or getCharacterRoot() ~= root
+                or not root.Parent
+                or not humanoid.Parent
+                or humanoid.Health <= 0
+                or workspace:FindFirstChild("World") ~= world
+                or world:FindFirstChild("AreaEntries") ~= entries
+                or entries:FindFirstChild(area) ~= entry
+                or entry.Position ~= destination
+                or getAreaPart(area) ~= route
+            then
+                return false
+            end
+
+            local liveArea, liveWave, liveStatus =
+                RuntimeFix.readZodiacState()
+
+            local waitingForFirstAmbush =
+                liveArea == "1"
+                and liveStatus == "waiting"
+                and segment == "level1"
+
+            return liveArea == area
+                and liveWave == 0
+                and (
+                    liveStatus == "active"
+                    or waitingForFirstAmbush
+                )
+        end
+
+        local held = RuntimeFix.ZodiacEntryHold
+
+        if held
+            and held.Root == root
+            and held.Entry == entry
+            and held.Position == destination
+            and held.Generation == generation
+            and held.Align == AlignPosition
+            and AlignPosition
+            and AlignPosition.Parent == root
+            and RootAttachment
+            and RootAttachment.Parent == root
+            and current()
+        then
+            RuntimeFix.zodiacStatus(
+                "Area " .. area .. " | ถึง Entry: รอ Wave จาก Server"
+            )
+            return true
+        end
+
+        stopHover()
+        RuntimeFix.ZodiacEntryHold = nil
+
+        if not current() then
+            return true
+        end
+
+        RuntimeFix.zodiacStatus(
+            "Area " .. area .. " | Tween ไป AreaEntries"
+        )
+
+        -- Arrive = 8 ตาม Native RunGuide ที่รายงานตรวจพบ
+        if (root.Position - destination).Magnitude > 8 then
+            local arrived = RuntimeFix.tweenRootTo(
+                CFrame.new(destination) * root.CFrame.Rotation,
+                current
+            )
+
+            if not arrived or not current() then
+                return true
+            end
+        end
+
+        if not current() or RuntimeFix.pauseFarmForSkill() then
+            return true
+        end
+
+        -- Hold ระหว่างรอ Wave ป้องกันตกจากระบบ Noclip เดิม
+        -- stopHover() เดิมเป็นเจ้าของ Cleanup ตัวแปรเหล่านี้
+        RootAttachment = Instance.new("Attachment")
+        RootAttachment.Name = "ZodiacEntryAttachment"
+        RootAttachment.Parent = root
+
+        AlignPosition = Instance.new("AlignPosition")
+        AlignPosition.Mode = Enum.PositionAlignmentMode.OneAttachment
+        AlignPosition.Attachment0 = RootAttachment
+        AlignPosition.Position = root.Position
+        AlignPosition.MaxForce = math.huge
+        AlignPosition.Responsiveness = 200
+        AlignPosition.RigidityEnabled = true
+        AlignPosition.ApplyAtCenterOfMass = true
+        AlignPosition.Parent = root
+
+        root.AssemblyLinearVelocity = Vector3.zero
+        root.AssemblyAngularVelocity = Vector3.zero
+
+        RuntimeFix.ZodiacEntryHold = {
+            Root = root,
+            Entry = entry,
+            Position = destination,
+            Generation = generation,
+            Align = AlignPosition,
+        }
+
+        RuntimeFix.zodiacStatus(
+            "Area " .. area .. " | ถึง Entry: รอ Wave จาก Server"
+        )
+        return true
+    end
+
     local function handleRaidState()
+        if workspace:GetAttribute("Mode") == "zodiacraid" then
+            return RuntimeFix.zodiacTransition()
+        end
         -- Fate: วาร์ปเข้าจุดเริ่มต่อสู้ครั้งเดียวเมื่อพบมอน
         if isFateRaid() then
             local character = getCharacter()
@@ -9539,6 +10496,30 @@ do
                 return
             end
             local char = getCharacter()
+
+            if workspace:GetAttribute("Mode") == "zodiacraid" then
+                local segment = workspace:GetAttribute("Segment")
+
+                if RuntimeFix.ZodiacObservedSegment ~= segment then
+                    stopHover()
+                    RuntimeFix.ZodiacObservedSegment = segment
+                    RuntimeFix.ZodiacEntryHold = nil
+                    CurrentAreaName = nil
+                    LastTeleportedArea = nil
+                end
+
+                if RuntimeFix.zodiacMovementBlocked() then
+                    stopHover()
+                    RuntimeFix.ZodiacEntryHold = nil
+                    return
+                end
+
+                if CurrentTarget
+                    and not RuntimeFix.zodiacCanAttack(CurrentTarget)
+                then
+                    stopHover()
+                end
+            end
 
             RuntimeFix.repairFarmCamera()
 
@@ -15691,7 +16672,7 @@ InterfaceManager:BuildInterfaceSection(Tabs.Appearance)
 
 -- Profiles: saved separately for each PlaceId, as in the supplied file.
 SaveManager:SetLibrary(MacUI)
-SaveManager:SetFolder("ZeroX/" .. tostring(game.PlaceId))
+SaveManager:SetFolder("ZeroX/" .. tostring(game.GameId))
 SaveManager:IgnoreThemeSettings()
 SaveManager:BuildConfigSection(Tabs.Profiles)
 
