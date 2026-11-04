@@ -465,6 +465,7 @@ local Tabs = {
         Title = "Macro ",
         Icon = "file",
     }),
+    Reward = Window:AddTab({ Title = "Reward", Icon = "gift" }),
     Player = Window:AddTab({ Title = "Player", Icon = "user" , Section = "Player" }),
     Appearance = Window:AddTab({ Title = "Settings", Icon = "palette", Section = "Settings" }),
     Profiles = Window:AddTab({ Title = "Profiles", Icon = "folder" }),
@@ -479,6 +480,559 @@ local Tabs = {
 -- Add controls before LoadAutoloadConfig at the bottom of this file.
 -- Connect callbacks only after the real game functions are available.
 --------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+-- REWARD: contracts supplied by the native reward inspection report
+--------------------------------------------------------------------------------
+do
+    local Storage = game:GetService("ReplicatedStorage")
+    local Http = game:GetService("HttpService")
+    local log = getfenv().warn
+
+    local settings = {
+        All = false,
+        Quests = false,
+        PassQuests = false,
+        Free = false,
+        Premium = false,
+    }
+
+    -- Preserve unresolved requests across re-execution.
+    local registry = _G.ZeroXRewardRuntime
+
+    if type(registry) ~= "table" then
+        registry = {
+            entries = {},
+            flight = nil,
+            nextSend = 0,
+        }
+        _G.ZeroXRewardRuntime = registry
+    end
+
+    local owner = {}
+    registry.owner = owner
+
+    local source
+    local replication
+    local loadAttempted = false
+    local lastLogs = {}
+
+    local function current()
+        return registry.owner == owner and not MacUI.Unloaded
+    end
+
+    local function report(stage, message)
+        local now = os.clock()
+
+        if now - (lastLogs[stage] or -math.huge) < 30 then
+            return
+        end
+
+        lastLogs[stage] = now
+
+        if type(log) == "function" then
+            log("[Zero X / Reward / " .. stage .. "] " .. tostring(message))
+        end
+    end
+
+    local function findPath(root, parts)
+        local object = root
+
+        for _, name in ipairs(parts) do
+            if not object then return nil end
+            object = object:FindFirstChild(name)
+        end
+
+        return object
+    end
+
+    local function enabled(category)
+        return settings.All or settings[category] == true
+    end
+
+    local function anyEnabled()
+        for _, value in pairs(settings) do
+            if value then return true end
+        end
+
+        return false
+    end
+
+    local function dataSnapshot()
+        local module = findPath(Storage, {
+            "ModuleLoader", "Client", "Replication",
+        })
+
+        if module ~= source then
+            source = module
+            replication = nil
+            loadAttempted = false
+        end
+
+        if not source or not source:IsA("ModuleScript") then
+            return nil
+        end
+
+        if not loadAttempted then
+            loadAttempted = true
+
+            local ok, result = pcall(require, source)
+
+            if not current() then return nil end
+
+            if ok and type(result) == "table"
+                and type(result.GetCurrentReplica) == "function" then
+                replication = result
+            else
+                report("Replication", ok
+                    and "Unexpected module interface"
+                    or result)
+            end
+        end
+
+        if not replication then return nil end
+
+        local ok, replica = pcall(replication.GetCurrentReplica)
+
+        if not current() then return nil end
+
+        if not ok then
+            report("Snapshot", replica)
+            return nil
+        end
+
+        if type(replica) ~= "table"
+            or type(replica.Data) ~= "table" then
+            return nil
+        end
+
+        return replica.Data
+    end
+
+    local function remoteFor(name)
+        local remote = findPath(Storage, {
+            "ModuleLoader", "Shared", "Network",
+            "RemoteFunction", name,
+        })
+
+        if remote and remote:IsA("RemoteFunction") then
+            return remote
+        end
+
+        return nil
+    end
+
+    local tierConfigSource
+    local tierConfigModule
+    local tierConfigRetryAt = 0
+
+    local function tierConfiguration()
+        local module = findPath(Storage, {
+            "ModuleLoader", "Configs", "Config",
+        })
+
+        if module ~= tierConfigSource then
+            tierConfigSource = module
+            tierConfigModule = nil
+            tierConfigRetryAt = 0
+        end
+
+        if not module or not module:IsA("ModuleScript") then
+            report("TierConfig", "Waiting for Config ModuleScript")
+            return nil
+        end
+
+        if not tierConfigModule then
+            if os.clock() < tierConfigRetryAt then
+                return nil
+            end
+
+            local ok, result = pcall(require, module)
+
+            if not current() then return nil end
+
+            if not ok or type(result) ~= "table" then
+                tierConfigRetryAt = os.clock() + 10
+                report("TierConfig", ok
+                    and "Unexpected Config result"
+                    or result)
+                return nil
+            end
+
+            tierConfigModule = result
+        end
+
+        local pass = tierConfigModule.Battlepass
+        local tiers = type(pass) == "table" and pass.Tiers
+
+        if type(tiers) ~= "table" then
+            report("TierConfig", "Waiting for Config.Battlepass.Tiers")
+            return nil
+        end
+
+        return tiers
+    end
+
+    local function collect(data, tierConfigs)
+        local result = {}
+
+        local function add(category, remote, args, eligible, claimed)
+            local key = Http:JSONEncode({ remote, args })
+
+            result[key] = {
+                key = key,
+                category = category,
+                remote = remote,
+                args = args,
+                eligible = eligible,
+                claimed = claimed,
+            }
+        end
+
+        local function quest(category, remote, args, record)
+            if type(record) ~= "table" then return end
+
+            local complete = record.Completed == true
+                or record.State == "Completed"
+
+            add(
+                category,
+                remote,
+                args,
+                complete and record.RewardClaimed ~= true,
+                record.RewardClaimed == true
+            )
+        end
+
+        if type(data.ActiveQuests) == "table" then
+            for category, container in pairs(data.ActiveQuests) do
+                if type(category) == "string"
+                    and type(container) == "table"
+                    and type(container.Quests) == "table" then
+                    for _, record in pairs(container.Quests) do
+                        if type(record) == "table"
+                            and type(record.Id) == "string"
+                            and record.Id ~= "" then
+                            quest("Quests", "CollectQuest",
+                                { record.Id, category }, record)
+                        end
+                    end
+                end
+            end
+        end
+
+        local bp = data.Battlepass
+
+        if type(bp) == "table" then
+            local pass = bp.PassQuests
+
+            if type(pass) == "table"
+                and type(pass.Quests) == "table" then
+                for _, record in pairs(pass.Quests) do
+                    if type(record) == "table"
+                        and type(record.Id) == "string"
+                        and record.Id ~= "" then
+                        quest("PassQuests", "CollectPassQuest",
+                            { record.Id }, record)
+                    end
+                end
+            end
+
+            local function integer(value, minimum, maximum)
+                return type(value) == "number"
+                    and value == value
+                    and value >= minimum
+                    and value <= maximum
+                    and value % 1 == 0
+            end
+
+            -- Defaults match the inspected native UI.
+            local currentTier = bp.CurrentTier
+            if currentTier == nil then currentTier = 0 end
+
+            if integer(currentTier, 0, 31) then
+                local nextTier = bp.NextTier
+                if nextTier == nil then
+                    nextTier = currentTier + 1
+                end
+
+                local exp = bp.EXP
+                if exp == nil then exp = 0 end
+
+                local validExp = type(exp) == "number"
+                    and exp == exp
+                    and exp >= 0
+                    and exp < math.huge
+
+                local tracks = bp.ClaimedTiers
+
+                if type(tracks) == "table" then
+                    -- Native supports the legacy flat Free claim table.
+                    local freeClaims = tracks.Default
+                    if freeClaims == nil then
+                        freeClaims = tracks
+                    end
+
+                    local premiumClaims = tracks.Premium
+                    if premiumClaims == nil then
+                        premiumClaims = bp.ClaimedPremiumTiers
+                    end
+
+                    local nextConfig = type(tierConfigs) == "table"
+                        and tierConfigs[nextTier]
+
+                    local validConfig = integer(nextTier, 1, 31)
+                        and type(nextConfig) == "table"
+                        and nextConfig.TierNumber == nextTier
+                        and type(nextConfig.TierEXP) == "number"
+                        and nextConfig.TierEXP == nextConfig.TierEXP
+                        and nextConfig.TierEXP >= 0
+                        and nextConfig.TierEXP < math.huge
+
+                    if enabled("Free")
+                        and integer(nextTier, 1, 31)
+                        and not validConfig then
+                        report("TierConfig",
+                            "Missing validated TierEXP for tier "
+                                .. tostring(nextTier))
+                    end
+
+                    -- Keep claimed tiers in the snapshot so reconcile()
+                    -- can confirm a pending claim after NextTier advances.
+                    for number = 1, 31 do
+                        if type(freeClaims) == "table" then
+                            local received = freeClaims[number] == true
+
+                            local unlocked = validConfig
+                                and validExp
+                                and number == nextTier
+                                and exp >= nextConfig.TierEXP
+
+                            add(
+                                "Free",
+                                "ClaimTier",
+                                { number, false },
+                                unlocked and not received,
+                                received
+                            )
+                        end
+
+                        if type(premiumClaims) == "table" then
+                            local received = premiumClaims[number] == true
+
+                            add(
+                                "Premium",
+                                "ClaimTier",
+                                { number, true },
+                                bp.Premium == true
+                                    and number <= currentTier
+                                    and not received,
+                                received
+                            )
+                        end
+                    end
+                end
+            else
+                report("TierState", "Invalid Battlepass.CurrentTier")
+            end
+        end
+
+        return result
+    end
+
+    local function reconcile(items)
+        local flight = registry.flight
+
+        if flight then
+            if flight.done then
+                registry.flight = nil
+
+                local entry = registry.entries[flight.key]
+
+                if entry == flight then
+                    if flight.ok and flight.result == true then
+                        entry.phase = "AwaitingState"
+                    else
+                        entry.phase = "Blocked"
+
+                        report("Rejected",
+                            flight.key .. " | " .. tostring(flight.result))
+                    end
+                end
+            elseif os.clock() - flight.sentAt >= 15 then
+                report("Pending",
+                    "InvokeServer unresolved; no duplicate request: "
+                        .. flight.key)
+            end
+        end
+
+        for key, entry in pairs(registry.entries) do
+            local item = items[key]
+
+            if item and item.claimed then
+                if registry.flight ~= entry then
+                    registry.entries[key] = nil
+                end
+
+            elseif item and entry.phase == "Blocked"
+                and not item.eligible then
+                -- Re-arm only after observing loss of eligibility.
+                -- A later eligible state can trigger a new operation.
+                registry.entries[key] = nil
+
+            elseif entry.phase == "AwaitingState"
+                and os.clock() - entry.sentAt >= 15 then
+                report("Completion",
+                    "Accepted; claim state not yet confirmed: " .. key)
+            end
+        end
+    end
+
+    local function step()
+        -- Only the lobby context was directly inspected in the report.
+        if game.PlaceId ~= 132929771812494 then
+            if anyEnabled() then
+                report("Context", "Waiting for inspected Lobby context")
+            end
+            return
+        end
+
+        if not anyEnabled()
+            and not registry.flight
+            and next(registry.entries) == nil then
+            return
+        end
+
+        local tierConfigs
+
+        if enabled("Free") then
+            tierConfigs = tierConfiguration()
+            if not current() then return end
+        end
+
+        local data = dataSnapshot()
+        if not current() then return end
+
+        if not data then
+            if anyEnabled() then
+                report("Loading", "Waiting for replicated reward data")
+            end
+            return
+        end
+
+        local items = collect(data, tierConfigs)
+        if not current() then return end
+
+        reconcile(items)
+
+        if registry.flight or os.clock() < registry.nextSend then
+            return
+        end
+
+        for key, item in pairs(items) do
+            if item.eligible
+                and enabled(item.category)
+                and registry.entries[key] == nil then
+                local remote = remoteFor(item.remote)
+
+                if not remote then
+                    report("Remote", "Waiting for " .. item.remote)
+                    continue
+                end
+
+                -- No yields between the final intent check and dispatch.
+                if not current() or not enabled(item.category) then
+                    return
+                end
+
+                local entry = {
+                    key = key,
+                    phase = "Pending",
+                    sentAt = os.clock(),
+                    done = false,
+                }
+
+                registry.entries[key] = entry
+                registry.flight = entry
+
+                -- Shared spacing exceeds all three inspected cooldowns.
+                registry.nextSend = entry.sentAt + 0.5
+
+                -- Independent receipt survives Off/re-execute.
+                task.spawn(function()
+                    if not current() or not enabled(item.category) then
+                        entry.cancelled = true
+                        entry.done = true
+                        return
+                    end
+
+                    entry.ok, entry.result = pcall(function()
+                        return remote:InvokeServer(table.unpack(item.args))
+                    end)
+
+                    entry.done = true
+                end)
+
+                return
+            end
+        end
+    end
+
+    local section = Tabs.Reward:AddSection({
+        Title = "Auto Claim",
+        Icon = "gift",
+    })
+
+    local function addToggle(index, title, key, description)
+        section:AddToggle(index, {
+            Title = title,
+            Description = description,
+            Default = false,
+            Callback = function(value)
+                if current() then
+                    settings[key] = value == true
+                end
+            end,
+        })
+    end
+
+    addToggle("ZeroXRewardAll", "Auto Claim All", "All",
+        "รับทุกประเภทด้านล่าง รวม Premium เฉพาะที่เป็นเจ้าของแล้ว")
+
+    addToggle("ZeroXRewardQuests", "Auto Claim Quests", "Quests",
+        "รับรางวัลเควสต์ที่สำเร็จและยังไม่ได้รับ")
+
+    addToggle("ZeroXRewardPassQuests", "Auto Claim Pass Quests", "PassQuests",
+        "รับรางวัลเควสต์ Battle Pass ที่สำเร็จ")
+
+    addToggle("ZeroXRewardFree", "Auto Claim Free Tiers", "Free",
+        "รับรางวัล Battle Pass ฝั่ง Free ที่ปลดล็อกแล้ว")
+
+    addToggle("ZeroXRewardPremium", "Auto Claim Premium Tiers", "Premium",
+        "รับเฉพาะเมื่อ Premium เป็นของบัญชีอยู่แล้ว ไม่ซื้อ Pass")
+
+    MacUI:OnUnload(function()
+        if registry.owner == owner then
+            registry.owner = nil
+        end
+    end)
+
+    task.spawn(function()
+        while current() do
+            local flight = registry.flight
+
+            if flight and flight.cancelled then
+                if registry.entries[flight.key] == flight then
+                    registry.entries[flight.key] = nil
+                end
+                registry.flight = nil
+            end
+
+            step()
+            task.wait(2)
+        end
+    end)
+end
 
 --------------------------------------------------------------------------------
 -- PLAY: Auto Join & Start Elevator
