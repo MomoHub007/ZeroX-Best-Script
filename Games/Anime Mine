@@ -7316,12 +7316,12 @@ do
         return true
     end
 
-    local function Reconcile(current)
+    local function Reconcile(current, feature)
         local pending = runtime.Pending
         local root, _, character = Root()
 
         local travel = pending.Travel
-        if travel then
+        if feature == "Sell" and travel then
             if root and character == travel.Character
                 and Within(root, travel.Spawn, ARRIVAL_RADIUS) then
                 area = travel.Mode
@@ -7336,7 +7336,7 @@ do
         end
 
         local tap = pending.Tap
-        if tap then
+        if feature == "Tap" and tap then
             local node = tap.Node
             local hp = node and node:GetAttribute("NodeHP")
             if not node or not node:IsDescendantOf(workspace)
@@ -7352,13 +7352,13 @@ do
             end
         end
 
-        if pending.Collect then
+        if feature == "Collect" and pending.Collect then
             DebugCollect(pending.Collect, current)
         end
 
         if not current then return end
 
-        if pending.Collect then
+        if feature == "Collect" and pending.Collect then
             local operation = pending.Collect
 
             if not operation.CollectTargets then
@@ -7388,7 +7388,7 @@ do
         end
 
         local sell = pending.Sell
-        if sell then
+        if feature == "Sell" and sell then
             if type(sell.Keys) ~= "table" or #sell.Keys == 0 then
                 Status("Sell", "Blocked: invalid pending sale keys")
                 return
@@ -7492,22 +7492,16 @@ do
         return bestNode, bestPart, bestDetector, bestHP
     end
 
-    local function Step()
+    local function Step(feature)
         local current, stateError = State()
         if not Active() then return end
 
-        Reconcile(current)
+        Reconcile(current, feature)
 
-        if not settings.Tap and not settings.Collect and not settings.Sell then
-            return
-        end
+        if not settings[feature] then return end
 
         if not current then
-            for _, key in ipairs({ "Tap", "Collect", "Sell" }) do
-                if settings[key] then
-                    Status(key, "Waiting: " .. tostring(stateError))
-                end
-            end
+            Status(feature, "Waiting: " .. tostring(stateError))
             return
         end
 
@@ -7520,15 +7514,108 @@ do
 
         WriteFarmLabel("Inventory", inventoryLabel, inventoryText)
 
-        local root, _, character = Root()
-        if not root then
-            for _, key in ipairs({ "Tap", "Collect", "Sell" }) do
-                if settings[key] then
-                    Status(key, "Waiting: character alive")
+        if feature == "Collect" then
+            -- Direct chest request: no ChestPrompt, distance check, or movement.
+            if settings.Collect and not runtime.Pending.Collect then
+                if chestCount > 0 then
+                    if not Remote() then
+                        Status("Collect", "Waiting: GamestateEvent available")
+                    else
+                        local Event = Remote()
+
+                        if Active() and settings.Collect
+                            and not runtime.Pending.Collect
+                            and Event then
+
+                            local operation = {
+                                Action = "MineTakeChest",
+                                At = os.clock(),
+                                CollectTargets = CaptureCollectTargets(current),
+                                DebugBefore = CollectSnapshot(current),
+                                DebugOwner = owner,
+                            }
+                            runtime.Pending.Collect = operation
+
+                            local ok, err = pcall(function()
+                                Event:FireServer("MineTakeChest")
+                            end)
+
+                            if not ok then
+                                operation.Error = tostring(err)
+                            end
+
+                            operation.DebugTransportOK = ok
+
+                            if Active() then
+                                Status("Collect", ok
+                                    and "Request Sent: MineTakeChest"
+                                    or ("Unknown: " .. tostring(err)))
+                            end
+                        end
+                    end
+                else
+                    Status("Collect", "Waiting: chest contents")
                 end
             end
             return
         end
+
+        local root, _, character = Root()
+        if not root then
+            Status(feature, "Waiting: character alive")
+            return
+        end
+
+        if feature == "Tap" then
+            if not settings.Tap or runtime.Pending.Tap then return end
+
+            local plot = Plot()
+            if not plot then
+                Status("Tap", "Waiting: owned plot")
+                return
+            end
+
+            local click = env.fireclickdetector
+            if type(click) ~= "function" then
+                Status("Tap", "Blocked: fireclickdetector unavailable")
+                return
+            end
+
+            local node, part, detector, hp = Weakest(plot, root)
+            if not node then
+                Status("Tap", "Waiting: eligible rock within click range")
+                return
+            end
+
+            if not Active() or not settings.Tap or runtime.Pending.Tap
+                or node.Parent ~= Child(plot, "Nodes")
+                or plot:GetAttribute("OwnerUserId") ~= LocalPlayer.UserId
+                or node:GetAttribute("NodeBroken") == true
+                or node:GetAttribute("NodeHP") ~= hp
+                or not part:IsDescendantOf(node)
+                or not detector:IsDescendantOf(node)
+                or detector.MaxActivationDistance <= 0
+                or (root.Position - part.Position).Magnitude > detector.MaxActivationDistance then
+                return
+            end
+
+            runtime.Pending.Tap = {
+                Node = node,
+                Parent = node.Parent,
+                HP = hp,
+                At = os.clock(),
+            }
+
+            local ok, err = pcall(click, detector)
+            if not Active() then return end
+
+            Status("Tap", ok
+                and ("Request Sent: " .. node.Name .. " | HP " .. tostring(hp))
+                or ("Unknown: click dispatch " .. tostring(err)))
+            return
+        end
+
+        if feature ~= "Sell" then return end
 
         -- Observe an already dispatched teleport before starting other actions.
         if runtime.Pending.Travel then return end
@@ -7536,10 +7623,6 @@ do
         -- Do not issue another sale while its previous outcome is unknown.
         if runtime.Pending.Sell then
             local sell = runtime.Pending.Sell
-
-            if settings.Tap then
-                Status("Tap", "Waiting: sale reconciliation")
-            end
 
             if not settings.Sell then return end
 
@@ -7713,95 +7796,6 @@ do
                 and "Waiting: bag threshold"
                 or "Waiting: minimum sale interval")
         end
-
-        -- Direct chest request: no ChestPrompt, distance check, or movement.
-        if settings.Collect and not runtime.Pending.Collect then
-            if chestCount > 0 then
-                if not Remote() then
-                    Status("Collect", "Waiting: GamestateEvent available")
-                else
-                    local Event = Remote()
-
-                    if Active() and settings.Collect
-                        and not runtime.Pending.Collect
-                        and Event then
-
-                        local operation = {
-                            Action = "MineTakeChest",
-                            At = os.clock(),
-                            CollectTargets = CaptureCollectTargets(current),
-                            DebugBefore = CollectSnapshot(current),
-                            DebugOwner = owner,
-                        }
-                        runtime.Pending.Collect = operation
-
-                        local ok, err = pcall(function()
-                            Event:FireServer("MineTakeChest")
-                        end)
-
-                        if not ok then
-                            operation.Error = tostring(err)
-                        end
-
-                        operation.DebugTransportOK = ok
-
-                        if Active() then
-                            Status("Collect", ok
-                                and "Request Sent: MineTakeChest"
-                                or ("Unknown: " .. tostring(err)))
-                        end
-                    end
-                end
-            else
-                Status("Collect", "Waiting: chest contents")
-            end
-        end
-
-        if not settings.Tap or runtime.Pending.Tap then return end
-
-        local plot = Plot()
-        if not plot then
-            Status("Tap", "Waiting: owned plot")
-            return
-        end
-
-        local click = env.fireclickdetector
-        if type(click) ~= "function" then
-            Status("Tap", "Blocked: fireclickdetector unavailable")
-            return
-        end
-
-        local node, part, detector, hp = Weakest(plot, root)
-        if not node then
-            Status("Tap", "Waiting: eligible rock within click range")
-            return
-        end
-
-        if not Active() or not settings.Tap or runtime.Pending.Tap
-            or node.Parent ~= Child(plot, "Nodes")
-            or plot:GetAttribute("OwnerUserId") ~= LocalPlayer.UserId
-            or node:GetAttribute("NodeBroken") == true
-            or node:GetAttribute("NodeHP") ~= hp
-            or not part:IsDescendantOf(node)
-            or not detector:IsDescendantOf(node)
-            or detector.MaxActivationDistance <= 0
-            or (root.Position - part.Position).Magnitude > detector.MaxActivationDistance then
-            return
-        end
-
-        runtime.Pending.Tap = {
-            Node = node,
-            Parent = node.Parent,
-            HP = hp,
-            At = os.clock(),
-        }
-
-        local ok, err = pcall(click, detector)
-        if not Active() then return end
-
-        Status("Tap", ok
-            and ("Request Sent: " .. node.Name .. " | HP " .. tostring(hp))
-            or ("Unknown: click dispatch " .. tostring(err)))
     end
 
     MacUI:OnUnload(function()
@@ -7814,33 +7808,40 @@ do
         -- Never reset user toggles or assume a server cancellation.
     end)
 
-    task.spawn(function()
-        local failureDelay = 1
-        local nextWarningAt = 0
+    for _, feature in ipairs({ "Tap", "Collect", "Sell" }) do
+        local currentFeature = feature
 
-        while Active() do
-            local ok, err = xpcall(Step, function(reason)
-                return debug.traceback(tostring(reason), 2)
-            end)
+        task.spawn(function()
+            local failureDelay = 1
+            local nextWarningAt = 0
 
-            if not Active() then break end
+            while Active() do
+                local ok, err = xpcall(function()
+                    Step(currentFeature)
+                end, function(reason)
+                    return debug.traceback(tostring(reason), 2)
+                end)
 
-            if not ok then
-                local now = os.clock()
-                if now >= nextWarningAt then
-                    nextWarningAt = now + 5
-                    warn("[Zero X / Farm Worker / Step] " .. tostring(err))
+                if not Active() then break end
+
+                if ok then
+                    failureDelay = 1
+                    task.wait(TICK)
+                else
+                    local now = os.clock()
+
+                    if now >= nextWarningAt then
+                        nextWarningAt = now + 5
+                        warn("[Zero X / Farm Worker / "
+                            .. currentFeature .. "] " .. tostring(err))
+                    end
+
+                    task.wait(failureDelay)
+                    failureDelay = math.min(failureDelay * 2, 8)
                 end
-
-                -- Existing reconciliation owns any already-sent operation.
-                task.wait(failureDelay)
-                failureDelay = math.min(failureDelay * 2, 8)
-            else
-                failureDelay = 1
-                task.wait(TICK)
             end
-        end
-    end)
+        end)
+    end
 end
 
 --------------------------------------------------------------------------------
