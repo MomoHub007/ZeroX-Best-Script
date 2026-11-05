@@ -2660,16 +2660,6 @@ do
                 return false
             end
 
-            if runtime.Pending or runtime.EquipBestPending
-                or runtime.ZonePending
-                or (runtime.PickaxePending
-                    and runtime.PickaxePending.Kind == "Buy") then
-                TreeUpgrade.Report(
-                    "Waiting: Miner upgrade / Equip Best reconciliation"
-                )
-                return false
-            end
-
             local now = os.clock()
             if now < nextPlanAt then return false end
             nextPlanAt = now + 1
@@ -2773,11 +2763,7 @@ do
                 or candidate.Kind == "Core" and coreToggle.Value == true
 
             if not Active() or not selectedEnabled
-                or runtime.Pending or runtime.TreePending
-                or runtime.ZonePending
-                or (runtime.PickaxePending
-                    and runtime.PickaxePending.Kind == "Buy")
-                or runtime.EquipBestPending then
+                or runtime.TreePending then
                 return false
             end
 
@@ -2815,6 +2801,49 @@ do
             return true
         end
     end
+
+    task.spawn(function()
+        local failureDelay = 1
+
+        while Active() do
+            local ok, err = xpcall(function()
+                if not TreeUpgrade.Enabled() and not runtime.TreePending then
+                    return
+                end
+
+                local GameState, moduleError = LoadModule("GameState")
+                if not Active() then return end
+
+                if not GameState then
+                    TreeUpgrade.Report("Waiting: " .. tostring(moduleError))
+                    return
+                end
+
+                local current, dataError = ReadData(GameState)
+                if not Active() then return end
+
+                if not current then
+                    TreeUpgrade.Report("Waiting: " .. tostring(dataError))
+                    return
+                end
+
+                TreeUpgrade.Step(current, GameState)
+            end, function(reason)
+                return debug.traceback(tostring(reason), 2)
+            end)
+
+            if not Active() then break end
+
+            if ok then
+                failureDelay = 1
+                task.wait(TICK)
+            else
+                TreeUpgrade.Report("Blocked: " .. tostring(err))
+                task.wait(failureDelay)
+                failureDelay = math.min(failureDelay * 2, 8)
+            end
+        end
+    end)
 
     local ZoneGear = {}
 
@@ -6414,21 +6443,45 @@ do
         end
     end
 
+    -- แต่ละระบบมีผู้เรียก Step ของตัวเองเพียงหนึ่งตัว
+    for _, feature in ipairs({
+        EnchantAuto,
+        GemShopAuto,
+        PotionAuto,
+        RewardAuto,
+        SummonAuto,
+    }) do
+        local currentFeature = feature
+
+        task.spawn(function()
+            local failureDelay = 1
+
+            while Active() do
+                local ok, err = xpcall(function()
+                    if Active() then
+                        currentFeature.Step()
+                    end
+                end, function(reason)
+                    return debug.traceback(tostring(reason), 2)
+                end)
+
+                if not Active() then break end
+
+                if ok then
+                    failureDelay = 1
+                    task.wait(TICK)
+                else
+                    -- ใช้ช่องรายงานภายในเดิม
+                    -- ตั้งเวลารอใหม่ โดยเก็บ Pending เดิมไว้
+                    TreeUpgrade.Report(tostring(err))
+                    task.wait(failureDelay)
+                    failureDelay = math.min(failureDelay * 2, 8)
+                end
+            end
+        end)
+    end
+
     local function Step()
-        EnchantAuto.Step()
-        if not Active() then return end
-
-        GemShopAuto.Step()
-        if not Active() then return end
-
-        PotionAuto.Step()
-        if not Active() then return end
-
-        RewardAuto.Step()
-        if not Active() then return end
-
-        SummonAuto.Step()
-        if not Active() then return end
 
         if enabled.Value ~= true
             and autoEquipBest.Value ~= true
@@ -6500,18 +6553,11 @@ do
         end
 
         if runtime.TreePending then
-            TreeUpgrade.Step(current, GameState)
             if not Active() then return end
 
             -- Physical Miner management does not dispatch Money upgrades.
             StepMinerManagement(current, GameState)
             return
-        end
-
-        if TreeUpgrade.Enabled() and runtime.Pending then
-            TreeUpgrade.Report("Waiting: Miner upgrade reconciliation")
-        elseif TreeUpgrade.Enabled() and runtime.EquipBestPending then
-            TreeUpgrade.Report("Waiting: Equip Best reconciliation")
         end
 
         if runtime.Pending
@@ -6564,9 +6610,6 @@ do
             StepMinerManagement(current, GameState)
             if not Active() then return end
 
-            -- Research/Core must not be starved by a physical prompt wait.
-            -- TreeUpgrade.Step refreshes state before planning a purchase.
-            TreeUpgrade.Step(current, GameState)
             return
         end
 
@@ -6575,8 +6618,6 @@ do
         end
 
         if StepMinerManagement(current, GameState) then return end
-
-        if TreeUpgrade.Step(current, GameState) then return end
 
         if PickaxeAuto.Step(current, GameState, false) then return end
 
@@ -7494,9 +7535,102 @@ do
 
         -- Do not issue another sale while its previous outcome is unknown.
         if runtime.Pending.Sell then
+            local sell = runtime.Pending.Sell
+
             if settings.Tap then
                 Status("Tap", "Waiting: sale reconciliation")
             end
+
+            if not settings.Sell then return end
+
+            if type(sell.Keys) ~= "table" or #sell.Keys == 0 then
+                Status("Sell", "Blocked: invalid pending sale keys")
+                return
+            end
+
+            local lastAttempt = math.max(
+                runtime.LastSellSent,
+                type(sell.At) == "number" and sell.At or 0
+            )
+
+            if os.clock() - lastAttempt < settings.Interval then
+                Status("Sell", "Waiting: minimum sale interval")
+                return
+            end
+
+            if mine.PendingTrade == true
+                or current.MineTradeSettling == true then
+                Status("Sell", "Waiting: trading / settling")
+                return
+            end
+
+            local hubSpawn = Child(
+                Child(Child(workspace, "MineWorld"), "Hub"),
+                "MineSpawn"
+            )
+
+            if not Within(root, hubSpawn, ARRIVAL_RADIUS) then
+                area = nil
+                areaCharacter = nil
+                EnsureArea("Sell", "Hub", hubSpawn, character)
+                return
+            end
+
+            local keys = {}
+
+            for _, key in ipairs(sell.Keys) do
+                if type(key) ~= "string" or key == "" then
+                    Status("Sell", "Blocked: invalid pending sale key")
+                    return
+                end
+
+                local count = mine.Ores[key]
+
+                if count ~= nil then
+                    if type(count) ~= "number" or count < 0 then
+                        Status("Sell", "Waiting: valid ore quantities")
+                        return
+                    end
+
+                    if count > 0 then
+                        table.insert(keys, key)
+                    end
+                end
+            end
+
+            -- Reconcile() ตรวจรายการที่หมดแล้วในรอบถัดไป
+            if #keys == 0 then return end
+
+            local Event = Remote()
+            if not Event then
+                Status("Sell", "Waiting: GamestateEvent available")
+                return
+            end
+
+            if not Active() or not settings.Sell
+                or runtime.Pending.Sell ~= sell
+                or runtime.Pending.Travel then
+                return
+            end
+
+            -- ผู้ใช้อนุญาตให้ Auto Sell ส่งซ้ำขณะผลเดิมยัง Unknown
+            -- บันทึกเวลาก่อนส่ง เพื่อเว้นช่วงแม้การเรียกเกิด Error
+            runtime.LastSellSent = os.clock()
+
+            local ok, err = pcall(function()
+                Event:FireServer("MineSellItems", keys)
+            end)
+
+            if not Active() or runtime.Pending.Sell ~= sell then
+                return
+            end
+
+            sell.Error = ok and nil or tostring(err)
+
+            Status("Sell", ok
+                and "Request Sent: sale retry; awaiting ore update"
+                or ("Unknown: sale retry | " .. tostring(err)))
+
             return
         end
 
