@@ -23,6 +23,54 @@ end
 local Options = MacUI.Options
 
 --------------------------------------------------------------------------------
+-- ZERO X: Anti AFK
+--------------------------------------------------------------------------------
+do
+    local env = type(getgenv) == "function"
+        and getgenv() or _G
+
+    local runtimeKey = "__ZEROX_ANTIAFK_V1"
+    local previous = env[runtimeKey]
+
+    -- ป้องกัน Connection ซ้ำเมื่อ Execute ใหม่
+    if type(previous) == "table"
+        and previous.Connection then
+        previous.Connection:Disconnect()
+    end
+
+    local owner = {}
+    local VirtualUser = game:GetService("VirtualUser")
+
+    local connection = LocalPlayer.Idled:Connect(function()
+        local current = env[runtimeKey]
+
+        if MacUI.Unloaded
+            or type(current) ~= "table"
+            or current.Owner ~= owner then
+            return
+        end
+
+        VirtualUser:CaptureController()
+        VirtualUser:ClickButton2(Vector2.new(0, 0))
+    end)
+
+    env[runtimeKey] = {
+        Owner = owner,
+        Connection = connection,
+    }
+
+    MacUI:OnUnload(function()
+        local current = env[runtimeKey]
+
+        if type(current) == "table"
+            and current.Owner == owner then
+            current.Connection:Disconnect()
+            env[runtimeKey] = nil
+        end
+    end)
+end
+
+--------------------------------------------------------------------------------
 -- Original theme definitions retained unchanged.
 --------------------------------------------------------------------------------
 
@@ -1051,6 +1099,8 @@ do
     local busy = false
     local activeVisit
     local toggle
+    local retryAttempt = 0
+    local retryTicket = 0
 
     local Play = Tabs.Lobby:AddSection({
         Title = "Play",
@@ -1130,6 +1180,34 @@ do
 
     local launch
 
+    local function scheduleRetry(token, reason)
+        if not alive or not enabled or token ~= generation then
+            return
+        end
+
+        retryAttempt = math.min(retryAttempt + 1, 5)
+
+        local retryDelay = math.min(2 ^ retryAttempt, 30)
+
+        retryTicket += 1
+        local ticket = retryTicket
+
+        warn(string.format(
+            "[Zero X / Auto Join] Retry in %ds: %s",
+            retryDelay,
+            tostring(reason)
+        ))
+
+        task.delay(retryDelay, function()
+            if ticket ~= retryTicket then return end
+
+            if alive and enabled
+                and token == generation and not busy then
+                launch()
+            end
+        end)
+    end
+
     launch = function()
         if busy or not alive or not enabled then
             return
@@ -1168,6 +1246,19 @@ do
                 if game.PlaceId ~= 132929771812494 then
                     error("Auto Join is available in the lobby.", 0)
                 end
+
+                -- Auto Join จะรอจนกว่า Auto Summon จะหยุด
+                while running() do
+                    local summon = Options.ZeroXAutoSummon
+
+                    if not summon or not summon.Value then
+                        break
+                    end
+
+                    task.wait(0.5)
+                end
+
+                if not running() then return end
 
                 -- Prevent the previous progression controller from
                 -- issuing competing summon / elevator commands.
@@ -1370,12 +1461,21 @@ do
             restorePosition()
             busy = false
 
-            if alive and token == generation and not ok then
-                enabled = false
-                generation += 1
-                toggle:SetValue(false)
-                setStatus(tostring(reason))
-                warn("[Zero X / Play]", reason)
+            if alive and token == generation then
+                if not ok then
+                    setStatus(tostring(reason))
+                    warn("[Zero X / Play]", reason)
+
+                    -- ผิด Place ไม่ Retry วน
+                    -- แต่ยังคง Toggle ไว้
+                    if game.PlaceId == 132929771812494 then
+                        scheduleRetry(token, reason)
+                    end
+                else
+                    -- รีเซ็ต Backoff เมื่อทำงานสำเร็จ
+                    retryAttempt = 0
+                end
+
             elseif alive and enabled and token ~= generation then
                 launch()
             end
@@ -1387,22 +1487,12 @@ do
         Description = "สร้างห้องและกด Start อัตโนมัติ",
         Default = false,
         Callback = function(value)
-            if value == true then
-                local summon = Options.ZeroXAutoSummon
-
-                if summon and summon.Value then
-                    task.defer(function()
-                        if alive and toggle then
-                            toggle:SetValue(false)
-                            setStatus("กรุณาปิดสุ่มอัตโนมัติก่อนเปิดเข้าด่าน")
-                        end
-                    end)
-                    return
-                end
-            end
-
             enabled = value == true
             generation += 1
+
+            -- ยกเลิก Retry เก่าทันที
+            retryTicket += 1
+            retryAttempt = 0
 
             if enabled then
                 launch()
@@ -1534,8 +1624,9 @@ do
                 end
 
                 local join = Options.ZeroXAutoJoinStart
+
                 if join and join.Value then
-                    join:SetValue(false)
+                    error("กรุณาปิด Auto Join ก่อนเปิด Auto Summon", 0)
                 end
 
                 local previous = _G.ZeroXCameramanKaitun
@@ -5637,6 +5728,17 @@ do
         end,
     })
 
+    local TARGET_MODES = {
+        "First",
+        "Last",
+        "Closest",
+        "Strong",
+        "Weak",
+    }
+
+    local TARGET_SEND_INTERVAL = 0.20
+    local TARGET_ACK_TIMEOUT = 3
+
     local function validateMacro(macro)
         if type(macro) ~= "table" or type(macro.Actions) ~= "table"
             or #macro.Actions == 0
@@ -5675,6 +5777,12 @@ do
             elseif action.kind == "Upgrade" then
                 if not keys[action.key] or not finite(action.level)
                     or action.level < 2 or action.level % 1 ~= 0 then
+                    return false
+                end
+
+            elseif action.kind == "Target" then
+                if not keys[action.key]
+                    or not table.find(TARGET_MODES, action.targetMode) then
                     return false
                 end
 
@@ -6118,6 +6226,50 @@ do
         end
     end
 
+    local function onTarget(payload)
+        if not alive or not activeMatch()
+            or type(payload) ~= "table" then
+            return
+        end
+
+        local id = saleId(payload.Id or payload.Index)
+        local mode = payload.TargetMode
+
+        if not id or not table.find(TARGET_MODES, mode) then
+            return
+        end
+
+        -- เก็บสถานะที่ Server ยืนยันกลับมา
+        local session = playing
+
+        if session then
+            session.targetModes[id] = mode
+
+            local pending = session.pending
+
+            if pending
+                and pending.kind == "Target"
+                and pending.id == id then
+                pending.acknowledgedMode = mode
+            end
+        end
+
+        -- บันทึกเฉพาะ Tower ที่ Macro เป็นผู้บันทึกไว้
+        local recordSession = recording
+
+        if recordSession and recordSession.keys[id] then
+            local data = runtime()
+
+            if data and owned(data.records[id]) then
+                append({
+                    kind = "Target",
+                    key = recordSession.keys[id],
+                    targetMode = mode,
+                })
+            end
+        end
+    end
+
     local function bind(name, callback)
         local remote = getRemote(name)
         local old = bindings[name]
@@ -6175,6 +6327,10 @@ do
             index = 1,
             ids = {},
             startedAt = os.clock(),
+
+            targetModes = {},
+            targetVisited = {},
+            lastTargetAt = -math.huge,
         }
 
         controller.Active = true
@@ -6182,7 +6338,7 @@ do
         return true
     end
 
-    local function evaluatePlayback(data, add, upgrade, sell)
+    local function evaluatePlayback(data, add, upgrade, sell, target)
         local session = playing
         if not session then return end
 
@@ -6213,11 +6369,95 @@ do
                 if confirmed then
                     session.ids[pending.key] = nil
                 end
+
+            elseif pending.kind == "Target" then
+                local currentMode = pending.acknowledgedMode
+
+                -- ตรวจ Acknowledgement จาก Server ก่อน
+                if currentMode then
+                    session.targetModes[pending.id] = currentMode
+
+                    if currentMode == pending.targetMode then
+                        confirmed = true
+                    else
+                        local visited =
+                            session.targetVisited[pending.key] or {}
+
+                        -- หากวนกลับไปโหมดเดิม แสดงว่าไม่สามารถ
+                        -- ไปถึงโหมดที่ต้องการได้ใน Cycle นี้
+                        if visited[currentMode] then
+                            stopWithError(
+                                "Target cycle ไม่สามารถไปถึง "
+                                .. pending.targetMode
+                            )
+                            return
+                        end
+
+                        visited[currentMode] = true
+                        session.targetVisited[pending.key] = visited
+
+                        session.pending = nil
+                        session.waitingSince = nil
+                        return
+                    end
+
+                elseif os.clock() - pending.sentAt >= TARGET_ACK_TIMEOUT then
+                    -- Timeout: ตรวจ State จริงก่อนตัดสินใจส่งซ้ำ
+                    local record = data.records[pending.id]
+
+                    if not owned(record) then
+                        stopWithError("Tower สำหรับเปลี่ยน Target หายไป")
+                        return
+                    end
+
+                    local observed = record.TargetMode or "First"
+
+                    if not table.find(TARGET_MODES, observed) then
+                        stopWithError("Target Mode ที่ได้รับไม่ถูกต้อง")
+                        return
+                    end
+
+                    if observed ~= pending.beforeMode then
+                        session.targetModes[pending.id] = observed
+
+                        if observed == pending.targetMode then
+                            confirmed = true
+                        else
+                            local visited =
+                                session.targetVisited[pending.key] or {}
+
+                            if visited[observed] then
+                                stopWithError(
+                                    "Target cycle วนซ้ำก่อนถึง "
+                                    .. pending.targetMode
+                                )
+                                return
+                            end
+
+                            visited[observed] = true
+                            session.targetVisited[pending.key] = visited
+
+                            session.pending = nil
+                            session.waitingSince = nil
+                            return
+                        end
+                    else
+                        -- ไม่มีการเปลี่ยน State:
+                        -- Clear Pending แล้วให้รอบถัดไป Retry
+                        session.pending = nil
+                        state = "Retrying · กำลังลองเปลี่ยน Target อีกครั้ง"
+                        return
+                    end
+                end
             end
 
             if confirmed then
                 session.pending = nil
                 session.waitingSince = nil
+
+                if pending.kind == "Target" then
+                    session.targetVisited[pending.key] = nil
+                end
 
                 if pending.kind == "Upgrade"
                     and pending.finalLevel
@@ -6396,6 +6636,81 @@ do
                 state = "Playing · รอยืนยันขาย: " .. record.Name
             end
 
+        elseif action.kind == "Target" then
+            local id = saleId(session.ids[action.key])
+            local record = id and data.records[id]
+
+            if not owned(record) then
+                stopWithError(
+                    "ไม่พบทาวเวอร์สำหรับเปลี่ยน Target ตามมาโคร"
+                )
+                return
+            end
+
+            local desiredMode = action.targetMode
+
+            if not table.find(TARGET_MODES, desiredMode) then
+                stopWithError("Target Mode ใน Macro ไม่ถูกต้อง")
+                return
+            end
+
+            -- ใช้ State ที่ Server ตอบกลับล่าสุดก่อน
+            local currentMode =
+                session.targetModes[id]
+                or record.TargetMode
+                or "First"
+
+            if not table.find(TARGET_MODES, currentMode) then
+                stopWithError("Current Target Mode ไม่ถูกต้อง")
+                return
+            end
+
+            -- ถึงเป้าหมายแล้ว ไม่ต้องส่ง Remote อีก
+            if currentMode == desiredMode then
+                session.index += 1
+                session.waitingSince = nil
+                session.targetVisited[action.key] = nil
+                return
+            end
+
+            -- เก็บโหมดที่เคยพบ เพื่อป้องกัน Cycle วนซ้ำ
+            local visited = session.targetVisited[action.key]
+
+            if not visited then
+                visited = {
+                    [currentMode] = true,
+                }
+
+                session.targetVisited[action.key] = visited
+            end
+
+            if not target then
+                state = "Waiting · รอ TowerTarget Remote"
+                return
+            end
+
+            -- ป้องกันส่ง Remote ถี่เกิน Security Throttle
+            if os.clock() - session.lastTargetAt
+                < TARGET_SEND_INTERVAL then
+                return
+            end
+
+            pending.id = id
+            pending.targetMode = desiredMode
+            pending.beforeMode = currentMode
+            pending.sentAt = os.clock()
+
+            session.pending = pending
+            session.lastTargetAt = pending.sentAt
+
+            -- ส่งคำขอให้ Server เปลี่ยนไปโหมดถัดไป
+            target:FireServer({
+                Id = id,
+            })
+
+            state = "Playing · กำลังเปลี่ยน Target: "
+                .. currentMode .. " → " .. desiredMode
+
         else
             local id = session.ids[action.key]
             local record = id and data.records[id]
@@ -6478,6 +6793,7 @@ do
         local upgrade = bind("TowerUpgrade", onUpgrade)
         local remove = bind("TowerRemove", onRemove)
         local sell = getRemote("TowerSell")
+        local target = bind("TowerTarget", onTarget)
 
         if not activeMatch() then
             if recording or playing then
@@ -6518,7 +6834,7 @@ do
             if playing.hasSales and (not sell or not remove) then
                 state = "Waiting · รอ TowerSell / TowerRemove"
             else
-                evaluatePlayback(data, add, upgrade, sell)
+                evaluatePlayback(data, add, upgrade, sell, target)
             end
         end
     end
