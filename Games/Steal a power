@@ -1,1 +1,3463 @@
+--[[
+    Zero X — Steal a SuperPower (World 2 & All Worlds)
+    Powered by MacUI Framework
+]]
 
+local BASE = (getgenv and getgenv().MacUIBase) or "https://raw.githubusercontent.com/Kiwzu/Mac-OS-UI-LUA/refs/heads/main/"
+
+local MacUI = loadstring(game:HttpGet(BASE .. "MacUIFramework.lua"))()
+local SaveManager = loadstring(game:HttpGet(BASE .. "SaveManager.lua"))()
+local InterfaceManager = loadstring(game:HttpGet(BASE .. "InterfaceManager.lua"))()
+local ThemeManager = loadstring(game:HttpGet(BASE .. "ThemeManager.lua"))()
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local TeleportService = game:GetService("TeleportService")
+local GuiService = game:GetService("GuiService")
+local VirtualUser = game:GetService("VirtualUser")
+
+local LocalPlayer = Players.LocalPlayer
+if not LocalPlayer then
+    warn("[Zero X] This script must run on the client.")
+    return
+end
+
+local Options = MacUI.Options
+local Remotes = ReplicatedStorage:WaitForChild("Remotes", 10)
+local LocalEnemyRegistry = pcall(function() return require(ReplicatedStorage.Client.Core.LocalEnemyRegistry) end) and require(ReplicatedStorage.Client.Core.LocalEnemyRegistry) or nil
+local PlayerState = pcall(function() return require(ReplicatedStorage.Client.Core.PlayerState) end) and require(ReplicatedStorage.Client.Core.PlayerState) or nil
+local PackConfig = pcall(function() return require(ReplicatedStorage.Shared.Config.PackConfig) end) and require(ReplicatedStorage.Shared.Config.PackConfig) or nil
+
+--------------------------------------------------------------------------------
+-- Themes
+--------------------------------------------------------------------------------
+
+local rgb = Color3.fromRGB
+MacUI:AddTheme("Ocean", {
+	Background = rgb(14, 26, 40),
+	Sidebar = rgb(19, 34, 52),
+	SidebarDivider = rgb(8, 16, 26),
+	Group = rgb(22, 39, 58),
+	GroupStroke = rgb(34, 56, 80),
+	Separator = rgb(36, 58, 82),
+	SubText = rgb(150, 172, 196),
+	Tertiary = rgb(96, 120, 146),
+	Control = rgb(44, 70, 98),
+	ControlHover = rgb(54, 84, 116),
+	ControlStroke = rgb(58, 88, 120),
+	Button = rgb(40, 66, 94),
+	ButtonHover = rgb(50, 80, 112),
+	Field = rgb(12, 22, 34),
+	FieldStroke = rgb(40, 64, 90),
+	Search = rgb(28, 48, 70),
+	SwitchOff = rgb(44, 70, 98),
+	Track = rgb(40, 64, 90),
+	SegmentBg = rgb(30, 52, 76),
+	SegmentSelected = rgb(64, 98, 134),
+	Menu = rgb(22, 39, 58),
+	MenuStroke = rgb(48, 76, 106),
+	Code = rgb(10, 19, 30),
+}, "Dark")
+
+MacUI:AddTheme("Rose", {
+	Background = rgb(252, 245, 247),
+	Sidebar = rgb(246, 231, 236),
+	Group = rgb(255, 255, 255),
+	Search = rgb(238, 222, 228),
+	SegmentBg = rgb(240, 225, 231),
+}, "Light")
+
+--------------------------------------------------------------------------------
+-- Window Creation
+--------------------------------------------------------------------------------
+
+local Window = MacUI:CreateWindow({
+	Title = "Zero X",
+	SubTitle = "Steal a SuperPower",
+	Icon = "command",
+	IconColor = "Blue",
+	Size = UDim2.fromOffset(820, 600),
+	MinSize = Vector2.new(620, 420),
+	TabWidth = 214,
+	Theme = "Dark",
+	Accent = "Blue",
+	SidebarStyle = "Tile",
+	Profile = { Title = "ZERO X SCRIPTHUB", Subtitle = "Steal a SuperPower v1.0" },
+	MinimizeKey = Enum.KeyCode.RightControl,
+	Acrylic = false,
+	KeybindList = false,
+	Search = true,
+	SearchPlaceholder = "Search",
+	Spotlight = true,
+	SpotlightKey = Enum.KeyCode.K,
+	Resizable = true,
+	ConfirmClose = true,
+	ReplaceExisting = true,
+	ShowDock = false,
+	Loading = false,
+	Undo = true,
+	PerformanceGuard = true,
+})
+
+--------------------------------------------------------------------------------
+-- Draggable Logo
+--------------------------------------------------------------------------------
+
+do
+	local screenGui = Window.ScreenGui
+
+	if screenGui and screenGui:IsA("ScreenGui") then
+		local LOGO_IMAGE = "rbxassetid://138334792995002"
+		local ICON_SIZE = 64
+		local TOP_OFFSET = 12
+		local DRAG_THRESHOLD = 6
+		local EDGE_MARGIN = 8
+
+		local connections = {}
+
+		local function Connect(signal, callback)
+			local connection = signal:Connect(callback)
+			table.insert(connections, connection)
+			return connection
+		end
+
+		local holder = Instance.new("Frame")
+		holder.Name = "ZeroXLogoHolder"
+		holder.Size = UDim2.fromOffset(ICON_SIZE + 12, ICON_SIZE + 28)
+		holder.Position = UDim2.new(0.5, -(ICON_SIZE + 12) / 2, 0, TOP_OFFSET)
+		holder.BackgroundTransparency = 1
+		holder.Visible = Window.Shown == false
+		holder.ZIndex = 50
+		holder.Parent = screenGui
+
+		local shadow = Instance.new("Frame")
+		shadow.Name = "Shadow"
+		shadow.Position = UDim2.fromOffset(4, 5)
+		shadow.Size = UDim2.fromOffset(ICON_SIZE + 4, ICON_SIZE + 4)
+		shadow.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+		shadow.BackgroundTransparency = 0.65
+		shadow.BorderSizePixel = 0
+		shadow.ZIndex = 50
+		shadow.Parent = holder
+
+		local shadowCorner = Instance.new("UICorner")
+		shadowCorner.CornerRadius = UDim.new(0, 20)
+		shadowCorner.Parent = shadow
+
+		local logoButton = Instance.new("ImageButton")
+		logoButton.Name = "ZeroXLogoButton"
+		logoButton.Position = UDim2.fromOffset(6, 0)
+		logoButton.Size = UDim2.fromOffset(ICON_SIZE, ICON_SIZE)
+		logoButton.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+		logoButton.BorderSizePixel = 0
+		logoButton.Image = ""
+		logoButton.AutoButtonColor = false
+		logoButton.Active = true
+		logoButton.ZIndex = 51
+		logoButton.Parent = holder
+
+		logoButton.BackgroundTransparency = 1
+		local visual = Instance.new("Frame")
+		visual.Name = "LogoSurface"
+		visual.AnchorPoint = Vector2.new(0.5, 0.5)
+		visual.Position = UDim2.fromScale(0.5, 0.5)
+		visual.Size = UDim2.fromScale(1, 1)
+		visual.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+		visual.BorderSizePixel = 0
+		visual.ZIndex = 51
+		visual.Parent = logoButton
+
+		local visualScale = Instance.new("UIScale")
+		visualScale.Parent = visual
+
+		local corner = Instance.new("UICorner")
+		corner.CornerRadius = UDim.new(0, 18)
+		corner.Parent = visual
+
+		local surface = Instance.new("UIGradient")
+		surface.Rotation = 90
+		surface.Color = ColorSequence.new(Color3.fromRGB(255, 255, 255))
+		surface.Parent = visual
+
+		local border = Instance.new("UIStroke")
+		border.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+		border.Color = Color3.fromRGB(190, 190, 195)
+		border.Transparency = 0.65
+		border.Thickness = 1
+		border.Parent = visual
+
+		local logoImage = Instance.new("ImageLabel")
+		logoImage.Name = "Logo"
+		logoImage.AnchorPoint = Vector2.new(0.5, 0.5)
+		logoImage.Position = UDim2.fromScale(0.5, 0.5)
+		logoImage.Size = UDim2.fromOffset(ICON_SIZE - 12, ICON_SIZE - 12)
+		logoImage.BackgroundTransparency = 1
+		logoImage.Image = LOGO_IMAGE
+		logoImage.ScaleType = Enum.ScaleType.Fit
+		logoImage.ZIndex = 52
+		logoImage.Parent = visual
+
+		local sheen = Instance.new("Frame")
+		sheen.Name = "HoverSheen"
+		sheen.Size = UDim2.fromScale(1, 1)
+		sheen.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+		sheen.BorderSizePixel = 0
+		sheen.ZIndex = 53
+		sheen.Parent = visual
+		local sheenCorner = Instance.new("UICorner")
+		sheenCorner.CornerRadius = UDim.new(0, 18)
+		sheenCorner.Parent = sheen
+		local sheenGradient = Instance.new("UIGradient")
+		sheenGradient.Rotation = 25
+		sheenGradient.Transparency = NumberSequence.new({
+			NumberSequenceKeypoint.new(0, 1),
+			NumberSequenceKeypoint.new(0.35, 1),
+			NumberSequenceKeypoint.new(0.5, 0.35),
+			NumberSequenceKeypoint.new(0.65, 1),
+			NumberSequenceKeypoint.new(1, 1),
+		})
+		sheenGradient.Offset = Vector2.new(-1.5, 0)
+		sheenGradient.Parent = sheen
+
+		local effectTweens = {}
+		local hovered = false
+		local function Animate(target, properties, instant, duration)
+			if effectTweens[target] then
+				effectTweens[target]:Cancel()
+				effectTweens[target] = nil
+			end
+			if instant then
+				for key, value in pairs(properties) do
+					target[key] = value
+				end
+				return
+			end
+			local tween = TweenService:Create(target,
+				TweenInfo.new(duration or 0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+				properties)
+			effectTweens[target] = tween
+			tween:Play()
+		end
+
+		local function SetEffect(pressed, instant)
+			local highlighted = hovered or pressed
+			Animate(visualScale, { Scale = pressed and 0.96 or (hovered and 1.08 or 1) }, instant)
+			Animate(visual, {
+				Position = UDim2.new(0.5, 0, 0.5, pressed and 0 or (hovered and -3 or 0)),
+			}, instant)
+			Animate(border, {
+				Color = highlighted and Color3.fromRGB(95, 175, 255) or Color3.fromRGB(190, 190, 195),
+				Transparency = highlighted and 0.12 or 0.65,
+				Thickness = highlighted and 1.8 or 1,
+			}, instant)
+			Animate(shadow, {
+				BackgroundTransparency = highlighted and 0.5 or 0.65,
+				Position = UDim2.fromOffset(4, hovered and 8 or 5),
+			}, instant)
+		end
+
+		local function ResetEffects()
+			hovered = false
+			SetEffect(false, true)
+			Animate(sheenGradient, { Offset = Vector2.new(-1.5, 0) }, true)
+		end
+
+		local activeInput
+		local startPointer
+		local startPosition
+		local moved = false
+
+		local function SetPositionClamped(position)
+			local bounds = screenGui.AbsoluteSize
+			local size = holder.AbsoluteSize
+
+			local marginX = math.min(EDGE_MARGIN, math.max(0, (bounds.X - size.X) / 2))
+			local marginY = math.min(EDGE_MARGIN, math.max(0, (bounds.Y - size.Y) / 2))
+
+			local x = math.clamp(position.X, marginX, math.max(marginX, bounds.X - size.X - marginX))
+			local y = math.clamp(position.Y, marginY, math.max(marginY, bounds.Y - size.Y - marginY))
+
+			holder.Position = UDim2.fromOffset(x, y)
+		end
+
+		local function GetLocalPosition()
+			local bounds = screenGui.AbsoluteSize
+			local position = holder.Position
+			return Vector2.new(
+				position.X.Scale * bounds.X + position.X.Offset,
+				position.Y.Scale * bounds.Y + position.Y.Offset
+			)
+		end
+
+		local function ResetDrag()
+			activeInput = nil
+			startPointer = nil
+			startPosition = nil
+			moved = false
+			SetEffect(false)
+		end
+
+		Connect(logoButton.MouseEnter, function()
+			if MacUI.Unloaded or not holder.Visible then return end
+			hovered = true
+			SetEffect(activeInput ~= nil)
+			if not activeInput then
+				Animate(sheenGradient, { Offset = Vector2.new(-1.5, 0) }, true)
+				Animate(sheenGradient, { Offset = Vector2.new(1.5, 0) }, false, 0.65)
+			end
+		end)
+
+		Connect(logoButton.MouseLeave, function()
+			hovered = false
+			SetEffect(activeInput ~= nil)
+		end)
+
+		Connect(logoButton.InputBegan, function(input)
+			if activeInput or MacUI.Unloaded or not holder.Visible then return end
+			local inputType = input.UserInputType
+			if inputType ~= Enum.UserInputType.MouseButton1 and inputType ~= Enum.UserInputType.Touch then return end
+			activeInput = input
+			startPointer = Vector2.new(input.Position.X, input.Position.Y)
+			startPosition = GetLocalPosition()
+			moved = false
+			SetEffect(true)
+		end)
+
+		Connect(UserInputService.InputChanged, function(input)
+			if not activeInput or not holder.Visible then return end
+			local isTouch = activeInput.UserInputType == Enum.UserInputType.Touch
+			if isTouch then
+				if input ~= activeInput then return end
+			elseif input.UserInputType ~= Enum.UserInputType.MouseMovement then
+				return
+			end
+
+			local pointer = Vector2.new(input.Position.X, input.Position.Y)
+			local delta = pointer - startPointer
+			if delta.Magnitude >= DRAG_THRESHOLD then moved = true end
+			if moved then SetPositionClamped(startPosition + delta) end
+		end)
+
+		Connect(UserInputService.InputEnded, function(input)
+			if not activeInput or input ~= activeInput then return end
+			local shouldOpen = not moved and holder.Visible and input.UserInputState ~= Enum.UserInputState.Cancel
+			ResetDrag()
+			if shouldOpen and not MacUI.Unloaded and not Window.Loading then
+				Window:Restore()
+			end
+		end)
+
+		Connect(UserInputService.WindowFocusReleased, function()
+			ResetDrag()
+			ResetEffects()
+		end)
+
+		Connect(screenGui:GetPropertyChangedSignal("AbsoluteSize"), function()
+			ResetDrag()
+			ResetEffects()
+			SetPositionClamped(GetLocalPosition())
+		end)
+
+		local originalSetVisible = Window.SetVisible
+		local function SetVisibleWithLogo(self, visible, instant)
+			originalSetVisible(self, visible, instant)
+			if holder.Parent then
+				ResetDrag()
+				ResetEffects()
+				holder.Visible = self.Shown == false
+			end
+		end
+
+		Window.SetVisible = SetVisibleWithLogo
+
+		MacUI:OnUnload(function()
+			for _, connection in ipairs(connections) do connection:Disconnect() end
+			table.clear(connections)
+			if Window.SetVisible == SetVisibleWithLogo then
+				Window.SetVisible = originalSetVisible
+			end
+			for target, tween in pairs(effectTweens) do
+				tween:Cancel()
+				effectTweens[target] = nil
+			end
+			holder:Destroy()
+		end)
+	end
+end
+
+--------------------------------------------------------------------------------
+-- Navigation Tabs
+--------------------------------------------------------------------------------
+
+local Tabs = {
+    Home = Window:AddTab({ Title = "Home", Icon = "home", Section = "ทั่วไป" }),
+    Main = Window:AddTab({ Title = "Auto Farm", Icon = "swords", Section = "การต่อสู้" }),
+    Dungeon = Window:AddTab({ Title = "Dungeon", Icon = "skull", Section = "การต่อสู้" }),
+    Packs = Window:AddTab({ Title = "Packs & Cards", Icon = "package", Section = "ความก้าวหน้า" }),
+    Base = Window:AddTab({ Title = "Base & Training", Icon = "home", Section = "ความก้าวหน้า" }),
+    Shrine = Window:AddTab({ Title = "Card Shrine", Icon = "flame", Section = "ความก้าวหน้า" }),
+    Upgrades = Window:AddTab({ Title = "Upgrades", Icon = "trending-up", Section = "ความก้าวหน้า" }),
+    Potions = Window:AddTab({ Title = "Potions & Cosmetics", Icon = "sparkles", Section = "ความก้าวหน้า" }),
+    Rewards = Window:AddTab({ Title = "Rewards & Codes", Icon = "gift", Section = "ความก้าวหน้า" }),
+    Teleport = Window:AddTab({ Title = "Teleports", Icon = "map-pin", Section = "เครื่องมือ" }),
+    Visuals = Window:AddTab({ Title = "Visuals", Icon = "eye", Section = "เครื่องมือ" }),
+    Player = Window:AddTab({ Title = "Player", Icon = "user", Section = "เครื่องมือ" }),
+    Appearance = Window:AddTab({ Title = "Settings", Icon = "palette", Section = "การตั้งค่า" }),
+    Profiles = Window:AddTab({ Title = "Profiles", Icon = "folder", Section = "การตั้งค่า" }),
+}
+
+--------------------------------------------------------------------------------
+-- Shared Helpers
+--------------------------------------------------------------------------------
+
+local WorldSupport = {
+    CachedSafeZoneCF = nil,
+    AbilityConfig = nil,
+    PredictedCast = nil,
+    AbilityCooldowns = {},
+}
+
+function WorldSupport.GetPlaceConfig()
+    local ok, mod = pcall(require, ReplicatedStorage.Shared.Config.PlaceConfig)
+    return (ok and type(mod) == "table") and mod or nil
+end
+
+function WorldSupport.GetWorld()
+    local pc = WorldSupport.GetPlaceConfig()
+    if pc and type(pc.World) == "number" then
+        return pc.World
+    end
+    return game.PlaceId == 82739382053686 and 2 or 1
+end
+
+function WorldSupport.IsDungeonAvailable()
+    return WorldSupport.GetWorld() >= 2 or workspace:FindFirstChild("DungeonPortal") ~= nil
+end
+
+function WorldSupport.GetLobbyHeight()
+    local pc = WorldSupport.GetPlaceConfig()
+    if pc and type(pc.LobbyHeight) == "number" then
+        return pc.LobbyHeight
+    end
+    local attr = workspace:GetAttribute("LobbyHeight")
+    if type(attr) == "number" then
+        return attr
+    end
+    return WorldSupport.GetWorld() >= 2 and 24 or 0
+end
+
+function WorldSupport.GetSafeZoneCFrame()
+    local spawnLoc = workspace:FindFirstChild("SpawnLocation")
+    if spawnLoc and spawnLoc:IsA("BasePart") then
+        local cf = CFrame.new(
+            spawnLoc.Position.X,
+            spawnLoc.Position.Y + spawnLoc.Size.Y * 0.5 + 3.2,
+            spawnLoc.Position.Z + 2
+        )
+        WorldSupport.CachedSafeZoneCF = cf
+        return cf
+    end
+    if WorldSupport.CachedSafeZoneCF then
+        return WorldSupport.CachedSafeZoneCF
+    end
+    local lobbyH = WorldSupport.GetLobbyHeight()
+    return CFrame.new(0, lobbyH > 0 and (lobbyH + 3) or 4, 2)
+end
+
+function WorldSupport.ParseCFrameString(raw)
+    if typeof(raw) == "CFrame" then return raw end
+    if type(raw) ~= "string" then return nil end
+    local nums = {}
+    for token in string.gmatch(raw, "[^,%s]+") do
+        local n = tonumber(token)
+        if not n then return nil end
+        table.insert(nums, n)
+    end
+    if #nums >= 12 then
+        return CFrame.new(table.unpack(nums, 1, 12))
+    elseif #nums >= 3 then
+        return CFrame.new(nums[1], nums[2], nums[3])
+    end
+    return nil
+end
+
+function WorldSupport.GetMyBaseCFrame()
+    local bases = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Bases")
+    if bases then
+        for _, base in ipairs(bases:GetChildren()) do
+            if base:GetAttribute("Owner") == LocalPlayer.UserId then
+                local ok, pivot = pcall(function() return base:GetPivot() end)
+                if ok and typeof(pivot) == "CFrame" then
+                    return pivot
+                end
+            end
+        end
+    end
+    return WorldSupport.ParseCFrameString(LocalPlayer:GetAttribute("BaseSpawn"))
+end
+
+function WorldSupport.GetZoneDisplayName(gate)
+    local ok, zc = pcall(require, ReplicatedStorage.Shared.Config.ZoneConfig)
+    if ok and type(zc) == "table" then
+        local info = zc[gate] or (gate == "Tutorial" and zc.StageTutorial)
+        if type(info) == "table" and type(info.Name) == "string" and info.Name ~= "" then
+            return info.Name
+        end
+    end
+    return gate
+end
+
+function WorldSupport.GetZones()
+    local padsFolder = ReplicatedStorage:FindFirstChild("EnemyPads")
+    local padByGate = {}
+    local padList = {}
+    if padsFolder then
+        for _, pad in ipairs(padsFolder:GetChildren()) do
+            local gate = pad:GetAttribute("Gate")
+            local padCF = pad:GetAttribute("PadCFrame")
+            if type(gate) == "string" and gate ~= "" then
+                table.insert(padList, { Pad = pad, Gate = gate, PadCFrame = padCF })
+                if not padByGate[gate] or typeof(padCF) == "CFrame" then
+                    padByGate[gate] = pad
+                end
+            end
+        end
+    end
+
+    local zones, seen = {}, {}
+    local pc = WorldSupport.GetPlaceConfig()
+    local worldCfg = pc and pc.Worlds and pc.Worlds[WorldSupport.GetWorld()]
+    local bosses = worldCfg and worldCfg.Bosses
+    if type(bosses) == "table" and #bosses > 0 then
+        for _, entry in ipairs(bosses) do
+            local gate = type(entry) == "table" and entry.Gate
+            if type(gate) == "string" and gate ~= "" and not seen[gate] then
+                seen[gate] = true
+                local pad = padByGate[gate]
+                local padCF = pad and pad:GetAttribute("PadCFrame")
+                table.insert(zones, {
+                    Key = gate,
+                    Name = WorldSupport.GetZoneDisplayName(gate),
+                    Pad = pad,
+                    CFrame = typeof(padCF) == "CFrame" and (padCF * CFrame.new(0, 4, 0)) or nil,
+                    MinZ = pad and pad:GetAttribute("ZoneMinZ"),
+                    MaxZ = pad and pad:GetAttribute("ZoneMaxZ"),
+                })
+            end
+        end
+    end
+
+    -- Fallback: populate directly from EnemyPads sorted from lobby (-Z progression)
+    table.sort(padList, function(a, b)
+        local za = typeof(a.PadCFrame) == "CFrame" and a.PadCFrame.Position.Z or 0
+        local zb = typeof(b.PadCFrame) == "CFrame" and b.PadCFrame.Position.Z or 0
+        return za > zb
+    end)
+    for _, item in ipairs(padList) do
+        if not seen[item.Gate] then
+            seen[item.Gate] = true
+            local padCF = item.PadCFrame
+            table.insert(zones, {
+                Key = item.Gate,
+                Name = WorldSupport.GetZoneDisplayName(item.Gate),
+                Pad = item.Pad,
+                CFrame = typeof(padCF) == "CFrame" and (padCF * CFrame.new(0, 4, 0)) or nil,
+                MinZ = item.Pad:GetAttribute("ZoneMinZ"),
+                MaxZ = item.Pad:GetAttribute("ZoneMaxZ"),
+            })
+        end
+    end
+    return zones
+end
+
+function WorldSupport.GetWorldMobs()
+    local seen, mobs = {}, {}
+    local padsFolder = ReplicatedStorage:FindFirstChild("EnemyPads")
+    if padsFolder then
+        for _, pad in ipairs(padsFolder:GetChildren()) do
+            local enemyName = pad:GetAttribute("Enemy")
+            if type(enemyName) == "string" and enemyName ~= "" and not seen[enemyName] then
+                seen[enemyName] = true
+                table.insert(mobs, enemyName)
+            end
+        end
+    end
+    if #mobs == 0 then
+        pcall(function()
+            local ec = require(ReplicatedStorage.Shared.Config.EnemyConfig)
+            for name in pairs(ec.Enemies or ec.Types or {}) do
+                if not seen[name] then
+                    seen[name] = true
+                    table.insert(mobs, name)
+                end
+            end
+        end)
+    end
+    table.sort(mobs)
+    table.insert(mobs, 1, "All")
+    return mobs
+end
+
+function WorldSupport.IsEnemyBoss(enemy)
+    if not enemy then return false end
+    if enemy:GetAttribute("Boss") == true then return true end
+    local ok, ec = pcall(require, ReplicatedStorage.Shared.Config.EnemyConfig)
+    if ok and type(ec) == "table" and type(ec.Types) == "table" then
+        local eType = enemy:GetAttribute("Type") or enemy.Name
+        local cfg = ec.Types[eType]
+        if type(cfg) == "table" and cfg.Boss == true then
+            return true
+        end
+    end
+    return enemy.Name:find("Dominus") ~= nil
+        or enemy.Name:find("Lord") ~= nil
+        or enemy.Name:find("King") ~= nil
+end
+
+function WorldSupport.GetAbilityModules()
+    if WorldSupport.AbilityConfig == nil then
+        local ok, mod = pcall(require, ReplicatedStorage.Shared.Config.AbilityConfig)
+        WorldSupport.AbilityConfig = (ok and type(mod) == "table") and mod or false
+    end
+    if WorldSupport.PredictedCast == nil then
+        local ok, mod = pcall(require, ReplicatedStorage.Client.Core.PredictedCast)
+        WorldSupport.PredictedCast = (ok and type(mod) == "table") and mod or false
+    end
+    return WorldSupport.AbilityConfig or nil, WorldSupport.PredictedCast or nil
+end
+
+function WorldSupport.CastEquippedAbilitiesAt(targetPos, burstAll)
+    local useAbility = Remotes and Remotes:FindFirstChild("UseAbility")
+    if not (useAbility and useAbility:IsA("RemoteEvent")) then
+        return false
+    end
+    local data = PlayerState and PlayerState.Data
+    local equipped = data and data.Equipped
+    if type(equipped) ~= "table" or #equipped == 0 then
+        return false
+    end
+
+    local abilityCfg, predictedCast = WorldSupport.GetAbilityModules()
+    local now = os.clock()
+    local fired = false
+
+    local function fireMove(card, abId, cooldown)
+        local key = tostring(card) .. "/" .. tostring(abId)
+        if (WorldSupport.AbilityCooldowns[key] or 0) > now then
+            return
+        end
+        local def = abilityCfg and abilityCfg.Get and abilityCfg.Get(abId)
+        local predict = def and def.Predict == true or false
+        local castId = (predictedCast and type(predictedCast.NextCastId) == "function")
+            and predictedCast.NextCastId()
+            or math.floor(now * 1000) % 1000000
+        pcall(function()
+            useAbility:FireServer(card, abId, targetPos, predict, castId)
+        end)
+        WorldSupport.AbilityCooldowns[key] = now + cooldown
+        fired = true
+    end
+
+    for _, card in ipairs(equipped) do
+        if type(card) == "string" and card ~= "" then
+            local cardData = data.Cards and data.Cards[card]
+            local cardLevel = (type(cardData) == "table" and tonumber(cardData.Level)) or 1
+            local primaryId = abilityCfg and abilityCfg.PrimaryFor and abilityCfg.PrimaryFor(card)
+            if type(primaryId) == "string" and primaryId ~= "" then
+                fireMove(card, primaryId, burstAll and 0.12 or 0.18)
+            end
+            if abilityCfg and abilityCfg.ForCard then
+                for _, ab in ipairs(abilityCfg.ForCard(card) or {}) do
+                    if type(ab) == "table" and type(ab.Id) == "string" and cardLevel >= (tonumber(ab.Level) or 1) then
+                        fireMove(card, ab.Id, burstAll and 0.35 or 0.65)
+                    end
+                end
+            elseif not primaryId then
+                fireMove(card, card, 0.2)
+            end
+        end
+    end
+
+    return fired
+end
+
+local function GetRoot()
+    local char = LocalPlayer.Character
+    return char and char:FindFirstChild("HumanoidRootPart")
+end
+
+local function GetHumanoid()
+    local char = LocalPlayer.Character
+    return char and char:FindFirstChildOfClass("Humanoid")
+end
+
+local function DamageEnemy(model, damageAmount)
+    if not (model and model:IsA("Model")) or model:GetAttribute("Dead") then
+        return false
+    end
+    if not (LocalEnemyRegistry and type(LocalEnemyRegistry.Damage) == "function") then
+        return false
+    end
+
+    local hum = model:FindFirstChildOfClass("Humanoid")
+    local hu = tonumber(model:GetAttribute("HealthUnit")) or 1
+    local currentHp = hum and hum.Health or 100
+
+    -- Dynamic lethal calculation: (Health * HealthUnit) accounts for world-tier health scaling
+    local lethal = (currentHp + 1e10) * hu * 2
+    local finalAmount = (damageAmount and damageAmount > lethal) and damageAmount or lethal
+
+    local ok, defeated = pcall(LocalEnemyRegistry.Damage, model, finalAmount)
+    if not ok then
+        warn("[Zero X] Damage failed: " .. tostring(defeated))
+        return false
+    end
+    return defeated == true
+end
+
+--------------------------------------------------------------------------------
+-- HOME TAB
+--------------------------------------------------------------------------------
+do
+    local HomeSection = Tabs.Home:AddSection({ Title = "Zero X — Steal a SuperPower", Icon = "shield-alert" })
+    
+    HomeSection:AddParagraph({
+        Title = "Status & Info",
+        Content = "• Game: Steal a SuperPower (World " .. tostring(WorldSupport.GetWorld()) .. ")\n• Script Status: Fully Loaded & Active\n• Place ID: " .. tostring(game.PlaceId) .. "\n• User: " .. LocalPlayer.Name,
+    })
+
+    local StatsSection = Tabs.Home:AddSection({ Title = "Player Stats", Icon = "activity" })
+    local powerLabel = StatsSection:AddLabel({ Title = "Power", Value = "..." })
+    local cashLabel = StatsSection:AddLabel({ Title = "Cash", Value = "..." })
+    local rebirthLabel = StatsSection:AddLabel({ Title = "Rebirths", Value = "..." })
+    local cardLabel = StatsSection:AddLabel({ Title = "Equipped Card", Value = "..." })
+
+    task.spawn(function()
+        while task.wait(1.5) do
+            if MacUI.Unloaded then break end
+            if PlayerState and PlayerState.Data then
+                pcall(function()
+                    powerLabel:SetValue(tostring(PlayerState.Data.Power or "0"))
+                    cashLabel:SetValue(tostring(PlayerState.Data.Cash or "0"))
+                    rebirthLabel:SetValue(tostring(PlayerState.Data.Rebirths or "0"))
+                    local eq = PlayerState.Data.Equipped
+                    cardLabel:SetValue(type(eq) == "table" and table.concat(eq, ", ") or tostring(eq or "None"))
+                end)
+            end
+        end
+    end)
+
+    local QuickSection = Tabs.Home:AddSection({ Title = "Quick Actions", Icon = "zap" })
+    QuickSection:AddButton({
+        Title = "Teleport Safe Zone",
+        Description = "ย้ายไปเขตปลอดภัยในล็อบบี้ทันที",
+        ButtonText = "Safe Zone",
+        Style = "Primary",
+        Callback = function()
+            local root = GetRoot()
+            if root then root.CFrame = WorldSupport.GetSafeZoneCFrame() end
+        end
+    })
+
+    QuickSection:AddButton({
+        Title = "Teleport Home",
+        Description = "ส่งคำสั่งกลับบ้านของเกม",
+        ButtonText = "Home Remote",
+        Callback = function()
+            if Remotes and Remotes:FindFirstChild("TeleportHome") then
+                Remotes.TeleportHome:FireServer()
+            end
+        end
+    })
+end
+
+--------------------------------------------------------------------------------
+-- MAIN / AUTO FARM TAB
+--------------------------------------------------------------------------------
+do
+    local FarmConfig = {
+        AutoKill = false,
+        KillRange = 250,
+        KillDelay = 0.1,
+        TargetMode = "All",
+        SelectedMob = "All",
+        OneHit = true,
+        AutoFarmTeleport = false,
+        SelectedZones = {},
+        ZoneIndex = 1,
+        ZoneDuration = 30,
+        NextZoneTime = nil,
+        ZoneTravelPending = false,
+        HoverHeight = 7,
+        AutoDeposit = false,
+        DepositThreshold = 3,
+        ReturningFromDeposit = false,
+        SavedFarmCFrame = nil,
+        DepositBlocked = false,
+        DepositGeneration = 0,
+    }
+
+    local FarmSection = Tabs.Main:AddSection({ Title = "Kill Aura & Combat", Icon = "swords" })
+
+    FarmSection:AddToggle("AutoKillToggle", {
+        Title = "Kill Aura (Auto Kill)",
+        Description = "เลือกโจมตีศัตรูที่อยู่ในระยะโดยอัตโนมัติ",
+        Default = false,
+        Callback = function(val)
+            FarmConfig.AutoKill = val
+        end
+    })
+
+    FarmSection:AddToggle("OneHitToggle", {
+        Title = "One-Hit Kill",
+        Description = "ใช้ค่าความเสียหายสูงในการโจมตี",
+        Default = true,
+        Callback = function(val)
+            FarmConfig.OneHit = val
+        end
+    })
+
+    FarmSection:AddDropdown("TargetModeDropdown", {
+        Title = "Target Mode",
+        Values = { "All", "Bosses Only", "Selected Mob Only", "Closest" },
+        Default = "All",
+        Callback = function(val)
+            FarmConfig.TargetMode = val
+        end
+    })
+
+    -- Dynamic Mob list for current world
+    local mobNames = WorldSupport.GetWorldMobs()
+
+    local mobDropdown = FarmSection:AddDropdown("SelectedMobDropdown", {
+        Title = "Target Mob Filter",
+        Values = mobNames,
+        Searchable = true,
+        Default = "All",
+        Callback = function(val)
+            FarmConfig.SelectedMob = val
+        end
+    })
+
+    FarmSection:AddSlider("KillRangeSlider", {
+        Title = "Aura Range (Studs)",
+        Min = 20,
+        Max = 1000,
+        Default = 250,
+        Increment = 10,
+        Callback = function(val)
+            FarmConfig.KillRange = val
+        end
+    })
+
+    FarmSection:AddSlider("KillDelaySlider", {
+        Title = "Attack Delay (Seconds)",
+        Min = 0.05,
+        Max = 1.0,
+        Rounding = 2,
+        Default = 0.1,
+        Callback = function(val)
+            FarmConfig.KillDelay = val
+        end
+    })
+
+    local TeleportFarmSection = Tabs.Main:AddSection({ Title = "Auto Teleport / Farm Mobs", Icon = "crosshair" })
+
+    local worldZones = WorldSupport.GetZones()
+    local zoneKeys = {}
+    local zoneValues = {}
+    for _, z in ipairs(worldZones) do
+        table.insert(zoneKeys, z.Key)
+        table.insert(zoneValues, z.Key)
+    end
+    if #zoneValues == 0 then table.insert(zoneValues, "Unavailable") end
+
+    TeleportFarmSection:AddDropdown("FarmZonesMultiDropdown", {
+        Title = "Farm Zones (none = all)",
+        Values = zoneValues,
+        Default = {},
+        Multi = true,
+        Callback = function(val)
+            FarmConfig.SelectedZones = type(val) == "table" and val or {}
+            FarmConfig.ZoneIndex = 1
+            FarmConfig.NextZoneTime = nil
+            FarmConfig.ZoneTravelPending = true
+        end
+    })
+
+    TeleportFarmSection:AddSlider("FarmZoneDurationSlider", {
+        Title = "Seconds per Zone",
+        Min = 5,
+        Max = 120,
+        Default = 30,
+        Increment = 5,
+        Callback = function(val)
+            FarmConfig.ZoneDuration = val
+            FarmConfig.NextZoneTime = nil
+        end
+    })
+
+    local function GetZonePad(zoneKey)
+        local pads = ReplicatedStorage:FindFirstChild("EnemyPads")
+        if not pads then return nil end
+        for _, pad in ipairs(pads:GetChildren()) do
+            if pad:GetAttribute("Gate") == zoneKey then return pad end
+        end
+        return nil
+    end
+
+    local function IsEnemyInZone(enemy, zonePad)
+        if not zonePad then return false end
+        local padId = enemy:GetAttribute("PadId")
+        local pads = zonePad.Parent
+        local enemyPad = padId and pads and pads:FindFirstChild(tostring(padId))
+        if not enemyPad then return false end
+        if enemyPad == zonePad then return true end
+        local minZ, maxZ = zonePad:GetAttribute("ZoneMinZ"), zonePad:GetAttribute("ZoneMaxZ")
+        return type(minZ) == "number" and type(maxZ) == "number"
+            and enemyPad:GetAttribute("ZoneMinZ") == minZ
+            and enemyPad:GetAttribute("ZoneMaxZ") == maxZ
+    end
+
+    TeleportFarmSection:AddToggle("AutoFarmTeleportToggle", {
+        Title = "Auto Farm (Teleport & Hover Above Mobs)",
+        Description = "เทเลพอร์ตเหนือเป้าหมายและโจมตีต่อเนื่อง",
+        Default = false,
+        Callback = function(val)
+            FarmConfig.AutoFarmTeleport = val
+            FarmConfig.ZoneIndex = 1
+            FarmConfig.NextZoneTime = nil
+            FarmConfig.ZoneTravelPending = val
+        end
+    })
+
+    TeleportFarmSection:AddSlider("HoverHeightSlider", {
+        Title = "Hover Height Above Mob",
+        Min = 3,
+        Max = 25,
+        Default = 7,
+        Increment = 1,
+        Callback = function(val)
+            FarmConfig.HoverHeight = val
+        end
+    })
+
+    local DepositSection = Tabs.Main:AddSection({ Title = "Auto Deposit Packs", Icon = "archive" })
+
+    DepositSection:AddToggle("AutoDepositToggle", {
+        Title = "Auto Return & Deposit Packs",
+        Description = "เมื่อถือแพ็กครบจำนวนที่กำหนด จะไปฝากในเขตปลอดภัย",
+        Default = false,
+        Callback = function(val)
+            FarmConfig.AutoDeposit = val
+            FarmConfig.DepositGeneration = FarmConfig.DepositGeneration + 1
+            FarmConfig.DepositBlocked = false
+        end
+    })
+
+    DepositSection:AddSlider("DepositThresholdSlider", {
+        Title = "Pack Count Threshold",
+        Min = 1,
+        Max = 10,
+        Default = 3,
+        Increment = 1,
+        Callback = function(val)
+            FarmConfig.DepositThreshold = val
+        end
+    })
+
+    local UtilitySection = Tabs.Main:AddSection({ Title = "Instant Actions", Icon = "zap" })
+
+    UtilitySection:AddButton({
+        Title = "Wipe All Current Mobs",
+        Description = "ส่งการโจมตีไปยังศัตรูที่โหลดอยู่บนแผนที่",
+        ButtonText = "Wipe All",
+        Style = "Destructive",
+        Callback = function()
+            local enemies = workspace:FindFirstChild("Enemies")
+            if not enemies then return end
+            local count = 0
+            for _, enemy in ipairs(enemies:GetChildren()) do
+                if enemy:IsA("Model") and not enemy:GetAttribute("Dead") then
+                    if DamageEnemy(enemy, 1e35) then
+                        count = count + 1
+                    else
+                        local eRoot = enemy.PrimaryPart or enemy:FindFirstChild("HumanoidRootPart") or enemy:FindFirstChildWhichIsA("BasePart")
+                        if eRoot and WorldSupport.CastEquippedAbilitiesAt(eRoot.Position, true) then
+                            count = count + 1
+                        end
+                    end
+                end
+            end
+            Window:Toast("Combat", { Detail = "Attacked " .. tostring(count) .. " mobs", Highlight = true })
+        end
+    })
+
+    local function GetCarriedPackIds()
+        local carried = LocalPlayer:GetAttribute("CarriedPacks")
+        if type(carried) ~= "string" then return nil, 0 end
+        local ids, count = {}, 0
+        for uid in string.gmatch(carried, "(%d+):[%w_]+") do
+            local id = tonumber(uid)
+            if not ids[id] then
+                ids[id] = true
+                count = count + 1
+            end
+        end
+        return ids, count
+    end
+
+    -- Farm Loop
+    task.spawn(function()
+        while task.wait(FarmConfig.KillDelay) do
+            if MacUI.Unloaded then break end
+
+            local root = GetRoot()
+            if not root then continue end
+            if FarmConfig.AutoDeposit and FarmConfig.DepositBlocked then continue end
+
+            -- 1. Auto Deposit Check
+            if FarmConfig.AutoDeposit and not FarmConfig.ReturningFromDeposit then
+                local packIds, carried = GetCarriedPackIds()
+                if carried >= FarmConfig.DepositThreshold then
+                    local claimRemote = Remotes and Remotes:FindFirstChild("PackClaim")
+                    if not claimRemote or not claimRemote:IsA("RemoteEvent") then
+                        FarmConfig.DepositBlocked = true
+                        Window:Toast("Auto Deposit", { Detail = "PackClaim unavailable; farming paused." })
+                        continue
+                    end
+                    FarmConfig.ReturningFromDeposit = true
+                    FarmConfig.SavedFarmCFrame = root.CFrame
+                    local generation = FarmConfig.DepositGeneration
+                    local remaining = carried
+                    local claimConnection = claimRemote.OnClientEvent:Connect(function(player, claimedIds)
+                        if player ~= LocalPlayer or type(claimedIds) ~= "table" then return end
+                        for _, uid in ipairs(claimedIds) do
+                            local id = tonumber(uid)
+                            if id and packIds[id] then
+                                packIds[id] = nil
+                                remaining = remaining - 1
+                            end
+                        end
+                    end)
+
+                    root.CFrame = WorldSupport.GetSafeZoneCFrame()
+                    local deadline = os.clock() + 10
+                    repeat
+                        task.wait(0.1)
+                    until remaining == 0 or os.clock() >= deadline or MacUI.Unloaded
+                        or not FarmConfig.AutoDeposit or generation ~= FarmConfig.DepositGeneration
+                        or GetRoot() ~= root or not root.Parent
+                    claimConnection:Disconnect()
+
+                    if remaining == 0 and FarmConfig.AutoDeposit and generation == FarmConfig.DepositGeneration
+                        and not MacUI.Unloaded and GetRoot() == root and root.Parent then
+                        root.CFrame = FarmConfig.SavedFarmCFrame
+                    elseif FarmConfig.AutoDeposit and generation == FarmConfig.DepositGeneration and not MacUI.Unloaded then
+                        FarmConfig.DepositBlocked = true
+                        Window:Toast("Auto Deposit", { Detail = "Deposit unconfirmed or character changed; farming paused. Toggle Auto Deposit to retry." })
+                    end
+                    FarmConfig.ReturningFromDeposit = false
+                    FarmConfig.SavedFarmCFrame = nil
+                    continue
+                end
+            end
+
+            -- 2. Kill Aura / Auto Kill
+            if FarmConfig.AutoKill or FarmConfig.AutoFarmTeleport then
+                local zonePad = nil
+                local selectedZoneCount = 0
+                local activeZone = nil
+                if FarmConfig.AutoFarmTeleport then
+                    local selected = {}
+                    for _, zoneKey in ipairs(zoneKeys) do
+                        if FarmConfig.SelectedZones[zoneKey] == true then
+                            table.insert(selected, zoneKey)
+                        end
+                    end
+                    selectedZoneCount = #selected
+                    if selectedZoneCount > 0 then
+                        if FarmConfig.ZoneIndex > selectedZoneCount then FarmConfig.ZoneIndex = 1 end
+                        if FarmConfig.NextZoneTime and os.clock() >= FarmConfig.NextZoneTime and selectedZoneCount > 1 then
+                            FarmConfig.ZoneIndex = FarmConfig.ZoneIndex % selectedZoneCount + 1
+                            FarmConfig.ZoneTravelPending = true
+                            FarmConfig.NextZoneTime = nil
+                        end
+                        activeZone = selected[FarmConfig.ZoneIndex]
+                        zonePad = GetZonePad(activeZone)
+                    end
+                    if FarmConfig.ZoneTravelPending and zonePad then
+                        local padCFrame = zonePad:GetAttribute("PadCFrame")
+                        if typeof(padCFrame) == "CFrame" then
+                            root.CFrame = padCFrame * CFrame.new(0, FarmConfig.HoverHeight, 0)
+                            FarmConfig.ZoneTravelPending = false
+                            FarmConfig.NextZoneTime = os.clock() + FarmConfig.ZoneDuration
+                        end
+                    end
+                    if selectedZoneCount > 1 and not FarmConfig.NextZoneTime then
+                        FarmConfig.NextZoneTime = os.clock() + FarmConfig.ZoneDuration
+                    end
+                end
+                local enemies = workspace:FindFirstChild("Enemies")
+                if enemies then
+                    local mobList = enemies:GetChildren()
+                    local validTargets = {}
+
+                    for _, enemy in ipairs(mobList) do
+                        if enemy:IsA("Model") and not enemy:GetAttribute("Dead")
+                            and (not FarmConfig.AutoFarmTeleport or selectedZoneCount == 0 or IsEnemyInZone(enemy, zonePad)) then
+                            local enemyRoot = enemy.PrimaryPart or enemy:FindFirstChild("HumanoidRootPart") or enemy:FindFirstChildWhichIsA("BasePart")
+                            if enemyRoot then
+                                local dist = (enemyRoot.Position - root.Position).Magnitude
+                                local isBoss = WorldSupport.IsEnemyBoss(enemy)
+                                
+                                local match = false
+                                if FarmConfig.TargetMode == "All" then
+                                    match = true
+                                elseif FarmConfig.TargetMode == "Bosses Only" then
+                                    match = isBoss
+                                elseif FarmConfig.TargetMode == "Selected Mob Only" then
+                                    match = (FarmConfig.SelectedMob == "All" or enemy.Name == FarmConfig.SelectedMob)
+                                elseif FarmConfig.TargetMode == "Closest" then
+                                    match = true
+                                end
+
+                                if match and (FarmConfig.AutoFarmTeleport or dist <= FarmConfig.KillRange) then
+                                    table.insert(validTargets, { Model = enemy, Root = enemyRoot, Dist = dist, IsBoss = isBoss })
+                                end
+                            end
+                        end
+                    end
+
+                    -- Sort by distance
+                    table.sort(validTargets, function(a, b) return a.Dist < b.Dist end)
+
+                    if #validTargets > 0 then
+                        local dmg = FarmConfig.OneHit and 1e35 or 1000
+
+                        if FarmConfig.AutoFarmTeleport then
+                            local target = validTargets[1]
+                            if root and target.Root and target.Root.Parent then
+                                root.CFrame = target.Root.CFrame * CFrame.new(0, FarmConfig.HoverHeight, 0)
+                                if not DamageEnemy(target.Model, dmg) then
+                                    WorldSupport.CastEquippedAbilitiesAt(target.Root.Position, FarmConfig.OneHit)
+                                end
+                            end
+                        else
+                            for _, target in ipairs(validTargets) do
+                                if not DamageEnemy(target.Model, dmg) and target.Root and target.Root.Parent then
+                                    WorldSupport.CastEquippedAbilitiesAt(target.Root.Position, FarmConfig.OneHit)
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end)
+end
+
+--------------------------------------------------------------------------------
+-- PACKS & CARDS TAB
+--------------------------------------------------------------------------------
+do
+    local PackSettings = {
+        AutoOpen = false,
+        SelectedPack = "All",
+        BatchCount = 1,
+        Speed = 0.3,
+        AutoFuseAll = false,
+        AutoEquipBest = false,
+    }
+
+    local PackSection = Tabs.Packs:AddSection({ Title = "Auto Open Packs", Icon = "package" })
+
+    PackSection:AddToggle("AutoOpenPacksToggle", {
+        Title = "Auto Open Packs",
+        Description = "เปิดแพ็กที่มีในคลังอัตโนมัติ",
+        Default = false,
+        Callback = function(val)
+            PackSettings.AutoOpen = val
+        end
+    })
+
+    local packChoices = { "All" }
+    if PackConfig and PackConfig.Order then
+        for _, name in ipairs(PackConfig.Order) do
+            table.insert(packChoices, name)
+        end
+    else
+        for _, name in ipairs({
+            "Rookie", "Hero", "Fighter", "Champion", "Legend", "Elite",
+            "Godly", "Secret", "Cosmic", "Supreme", "Rift", "Hex",
+            "Omega", "Phantom", "Sanctum", "Null", "Ascension", "Eternity", "Oblivion"
+        }) do
+            table.insert(packChoices, name)
+        end
+    end
+
+    PackSection:AddDropdown("SelectPackDropdown", {
+        Title = "Select Pack",
+        Values = packChoices,
+        Searchable = true,
+        Default = "All",
+        Callback = function(val)
+            PackSettings.SelectedPack = val
+        end
+    })
+
+    PackSection:AddSlider("PackBatchSlider", {
+        Title = "Open Batch Count",
+        Min = 1,
+        Max = 10,
+        Default = 1,
+        Increment = 1,
+        Callback = function(val)
+            PackSettings.BatchCount = val
+        end
+    })
+
+    PackSection:AddSlider("OpenSpeedSlider", {
+        Title = "Open Delay (Seconds)",
+        Min = 0.1,
+        Max = 2.0,
+        Rounding = 2,
+        Default = 0.3,
+        Callback = function(val)
+            PackSettings.Speed = val
+        end
+    })
+
+    local CardSection = Tabs.Packs:AddSection({ Title = "Card Automation", Icon = "layers" })
+
+    CardSection:AddToggle("AutoFuseToggle", {
+        Title = "Auto Fuse All Cards",
+        Description = "รวมการ์ดซ้ำตามช่วงเวลา",
+        Default = false,
+        Callback = function(val)
+            PackSettings.AutoFuseAll = val
+        end
+    })
+
+    CardSection:AddToggle("AutoEquipBestToggle", {
+        Title = "Auto Equip Best Card",
+        Description = "ส่งคำสั่งสวมการ์ดที่ดีที่สุดอัตโนมัติ",
+        Default = false,
+        Callback = function(val)
+            PackSettings.AutoEquipBest = val
+        end
+    })
+
+    CardSection:AddButton({
+        Title = "Fuse All Cards Now",
+        Description = "ส่งคำสั่งรวมการ์ดซ้ำที่ใช้ได้ทันที",
+        ButtonText = "Fuse All",
+        Style = "Primary",
+        Callback = function()
+            if Remotes and Remotes:FindFirstChild("FuseAll") then
+                local res = Remotes.FuseAll:InvokeServer()
+                Window:Toast("Cards", { Detail = res and "Cards successfully merged!" or "No cards ready to merge" })
+            end
+        end
+    })
+
+    CardSection:AddButton({
+        Title = "Equip Best Card Now",
+        Description = "ส่งคำสั่งสวมการ์ดที่ดีที่สุด",
+        ButtonText = "Equip Best",
+        Callback = function()
+            if Remotes and Remotes:FindFirstChild("EquipBest") then
+                local res = Remotes.EquipBest:InvokeServer()
+                Window:Toast("Cards", { Detail = res and "Equipped best card!" or "Already holding best card" })
+            end
+        end
+    })
+
+    local IndexSection = Tabs.Packs:AddSection({ Title = "Card Index Rewards", Icon = "book-open" })
+
+    local CardIndexSettings = {
+        AutoClaimIndex = false,
+    }
+
+    local function GetIndexRarities()
+        local list = {}
+        pcall(function()
+            local CardIndex = require(ReplicatedStorage.Shared.Rules.CardIndex)
+            for _, sec in ipairs(CardIndex.Sections or {}) do
+                if type(sec) == "table" and type(sec.Rarity) == "string" and sec.Reward then
+                    table.insert(list, sec.Rarity)
+                end
+            end
+        end)
+        if #list > 0 then return list end
+        return {
+            "Common", "Uncommon", "Rare", "Epic", "Legendary", "Mythic",
+            "God", "Secret", "Cosmic", "Ancient", "Cursed", "Omega",
+            "Ethereal", "Divine", "Void", "Transcendent"
+        }
+    end
+
+    local function FillBestBaseHolders(delayPerSlot)
+        local placed = 0
+        pcall(function()
+            if not (Remotes and Remotes:FindFirstChild("BasePlace") and PlayerState and PlayerState.Data) then return end
+            local data = PlayerState.Data
+            local BaseConfig = require(ReplicatedStorage.Shared.Config.BaseConfig)
+            local maxSlots = math.min((BaseConfig and BaseConfig.MaxHolders) or 10, (data.Base and tonumber(data.Base.Slots)) or 10)
+            local currentHolders = (data.Base and data.Base.Holders) or {}
+            local desiredHolders = nil
+
+            if BaseConfig and type(BaseConfig.BestHolders) == "function" then
+                local best, hasChanges = BaseConfig.BestHolders(data)
+                if type(best) == "table" then
+                    if hasChanges == false then return end
+                    desiredHolders = best
+                end
+            end
+
+            if not desiredHolders then
+                local CardConfig = require(ReplicatedStorage.Shared.Config.CardConfig)
+                local equippedSet = {}
+                if type(data.Equipped) == "table" then
+                    for _, id in ipairs(data.Equipped) do equippedSet[id] = true end
+                end
+                local sorted = {}
+                for cardId, info in pairs(data.Cards or {}) do
+                    if not equippedSet[cardId] then
+                        local cfg = CardConfig.ById and CardConfig.ById[cardId]
+                        local power = BaseConfig and type(BaseConfig.CardCash) == "function"
+                            and tonumber(BaseConfig.CardCash(data, cardId, info.Level or 1))
+                            or ((info.Level or 1) * (cfg and cfg.Damage or 10))
+                        table.insert(sorted, { Id = cardId, Power = power or 0 })
+                    end
+                end
+                table.sort(sorted, function(a, b) return a.Power > b.Power end)
+                desiredHolders = {}
+                for slot = 1, maxSlots do
+                    if sorted[slot] then
+                        desiredHolders[tostring(slot)] = sorted[slot].Id
+                    end
+                end
+            end
+
+            for slot = 1, maxSlots do
+                local neededCard = desiredHolders[tostring(slot)]
+                if neededCard and currentHolders[tostring(slot)] ~= neededCard then
+                    local ok, res = pcall(function() return Remotes.BasePlace:InvokeServer(slot, neededCard) end)
+                    if ok and res then placed = placed + 1 end
+                    if delayPerSlot and delayPerSlot > 0 then task.wait(delayPerSlot) end
+                end
+            end
+        end)
+        return placed
+    end
+
+    IndexSection:AddToggle("AutoClaimIndexToggle", {
+        Title = "Auto Claim Completed Index",
+        Description = "รับรางวัลระดับการ์ดที่สะสมครบอัตโนมัติ",
+        Default = false,
+        Callback = function(val)
+            CardIndexSettings.AutoClaimIndex = val
+        end
+    })
+
+    IndexSection:AddButton({
+        Title = "Claim All Completed Index Rewards",
+        Description = "ตรวจและรับรางวัลระดับที่พร้อมรับ",
+        ButtonText = "Claim All Index",
+        Style = "Primary",
+        Callback = function()
+            local rarities = GetIndexRarities()
+            local claimedCount = 0
+            if Remotes and Remotes:FindFirstChild("ClaimIndex") then
+                for _, rarity in ipairs(rarities) do
+                    local canClaim = false
+                    pcall(function()
+                        local CardIndex = require(ReplicatedStorage.Shared.Rules.CardIndex)
+                        canClaim = CardIndex.CanClaim(PlayerState.Data, rarity)
+                    end)
+                    local alreadyClaimed = PlayerState and PlayerState.Data and PlayerState.Data.IndexClaims and PlayerState.Data.IndexClaims[rarity]
+                    if canClaim and not alreadyClaimed then
+                        local ok, success = pcall(function() return Remotes.ClaimIndex:InvokeServer(rarity) end)
+                        if ok and success then claimedCount = claimedCount + 1 end
+                    end
+                end
+            end
+            Window:Toast("Card Index", { Detail = claimedCount > 0 and ("Claimed " .. claimedCount .. " index rewards!") or "No new completed index rewards" })
+        end
+    })
+
+    local BaseSection = Tabs.Base:AddSection({ Title = "Base & Bench Automation", Icon = "home" })
+
+    local BaseSettings = {
+        AutoFillHolders = false,
+        AutoUpgradeBench = false,
+        AutoTrainBench = false,
+    }
+    local lastRequestedBenchLevel = nil
+
+    BaseSection:AddToggle("AutoFillHoldersToggle", {
+        Title = "Auto Place Best Cards on Base",
+        Description = "เลือกการ์ดและส่งคำสั่งวางบนฐานอัตโนมัติ",
+        Default = false,
+        Callback = function(val)
+            BaseSettings.AutoFillHolders = val
+        end
+    })
+
+    BaseSection:AddButton({
+        Title = "Fill All Base Holders Now",
+        Description = "ส่งคำสั่งวางการ์ดในช่องฐาน",
+        ButtonText = "Fill Base",
+        Callback = function()
+            local placed = FillBestBaseHolders(0.15)
+            Window:Toast("Base", { Detail = placed > 0 and ("Placed " .. placed .. " cards on base!") or "Base holders up to date" })
+        end
+    })
+
+    BaseSection:AddToggle("AutoUpgradeBenchToggle", {
+        Title = "Auto Upgrade Workout Bench",
+        Description = "ส่งคำสั่งอัปเกรดม้านั่งเมื่อเงินเพียงพอ",
+        Default = false,
+        Callback = function(val)
+            BaseSettings.AutoUpgradeBench = val
+            lastRequestedBenchLevel = nil
+        end
+    })
+
+    BaseSection:AddToggle("AutoTrainBenchToggle", {
+        Title = "Auto Train on Bench",
+        Description = "เทเลพอร์ตไปม้านั่งและส่งคำสั่งเริ่มฝึก",
+        Default = false,
+        Callback = function(val)
+            BaseSettings.AutoTrainBench = val
+        end
+    })
+
+    BaseSection:AddButton({
+        Title = "Stop Bench Training",
+        ButtonText = "Get Up",
+        Callback = function()
+            if Remotes and Remotes:FindFirstChild("BenchStop") then
+                Remotes.BenchStop:FireServer()
+                local root = GetRoot()
+                if root then root.Anchored = false end
+            end
+        end
+    })
+
+    local ShrineSection = Tabs.Shrine:AddSection({ Title = "Card Shrine & Shards", Icon = "flame" })
+
+    local ShrineSettings = {
+        AutoSacrificeCommons = false,
+        SelectedRarities = {},
+    }
+    local shrineBusy = false
+    local shrineRequests = {}
+    local shrineModulesOk, CardConfig, Shrine = pcall(function()
+        return require(ReplicatedStorage.Shared.Config.CardConfig), require(ReplicatedStorage.Shared.Rules.Shrine)
+    end)
+    local sacrificeRarities = {}
+    if shrineModulesOk and type(CardConfig.RarityOrder) == "table" and type(CardConfig.RarityRank) == "table" then
+        local exoticRank = CardConfig.RarityRank.Exotic
+        if type(exoticRank) == "number" then
+            for _, rarity in ipairs(CardConfig.RarityOrder) do
+                if type(rarity) == "string" and type(CardConfig.RarityRank[rarity]) == "number"
+                    and CardConfig.RarityRank[rarity] < exoticRank then
+                    table.insert(sacrificeRarities, rarity)
+                end
+            end
+        end
+    end
+    if #sacrificeRarities == 0 then
+        table.insert(sacrificeRarities, "Unavailable")
+    end
+
+    ShrineSection:AddDropdown("SacrificeRarityDropdown", {
+        Title = "Sacrifice Rarities",
+        Values = sacrificeRarities,
+        Default = {},
+        Multi = true,
+        Callback = function(value)
+            ShrineSettings.SelectedRarities = type(value) == "table" and value or {}
+        end
+    })
+
+    local function SacrificeNextCard()
+        if shrineBusy then return "A sacrifice request is already pending." end
+        if not shrineModulesOk or #sacrificeRarities == 0 or sacrificeRarities[1] == "Unavailable" then
+            return "Shrine configuration unavailable.", true
+        end
+        local remote = Remotes and Remotes:FindFirstChild("Sacrifice")
+        local data = PlayerState and PlayerState.Data
+        if not remote or not remote:IsA("RemoteFunction") or not data or type(data.Cards) ~= "table" then
+            return "Sacrifice remote or card inventory unavailable.", true
+        end
+        for cardId, info in pairs(data.Cards) do
+            local cfg = CardConfig.ById and CardConfig.ById[cardId]
+            if type(cardId) == "string" and type(info) == "table" and type(info.Count) == "number"
+                and cfg and ShrineSettings.SelectedRarities[cfg.Rarity] == true then
+                local spare = Shrine.Spare(data, cardId)
+                local amount = type(spare) == "number" and math.min(math.floor(spare), 1000) or 0
+                if amount > 0 and shrineRequests[cardId] ~= info.Count then
+                    shrineBusy = true
+                    shrineRequests[cardId] = info.Count
+                    local ok, success, reason = pcall(function()
+                        return remote:InvokeServer(cardId, amount)
+                    end)
+                    shrineBusy = false
+                    if not ok then return "Request failed; result unknown for " .. cardId .. ".", true end
+                    if not success then return type(reason) == "string" and reason or "Sacrifice rejected.", true end
+                    return "Sacrificed " .. tostring(amount) .. " copies of " .. cardId .. "."
+                end
+            end
+        end
+        return "No eligible cards ready."
+    end
+
+    ShrineSection:AddToggle("AutoSacrificeCommonsToggle", {
+        Title = "Auto Sacrifice Selected Rarities",
+        Description = "สละการ์ดส่วนเกินของระดับที่เลือก",
+        Default = false,
+        Callback = function(val)
+            ShrineSettings.AutoSacrificeCommons = val
+        end
+    })
+
+    ShrineSection:AddButton({
+        Title = "Sacrifice Next Selected Card",
+        ButtonText = "Sacrifice Now",
+        Style = "Primary",
+        Callback = function()
+            local ok, result = pcall(SacrificeNextCard)
+            if not MacUI.Unloaded then
+                Window:Toast("Card Shrine", { Detail = ok and result or ("Error: " .. tostring(result)) })
+            end
+        end
+    })
+
+    -- Auto Open Loop
+    task.spawn(function()
+        while task.wait(PackSettings.Speed) do
+            if MacUI.Unloaded then break end
+            if PackSettings.AutoOpen and Remotes and Remotes:FindFirstChild("OpenPack") then
+                pcall(function()
+                    if PlayerState and PlayerState.Data and PlayerState.Data.Packs then
+                        local userPacks = PlayerState.Data.Packs
+                        if PackSettings.SelectedPack == "All" then
+                            for packName, count in pairs(userPacks) do
+                                if type(count) == "number" and count > 0 then
+                                    Remotes.OpenPack:InvokeServer(packName, math.min(count, PackSettings.BatchCount))
+                                    break
+                                end
+                            end
+                        else
+                            local count = userPacks[PackSettings.SelectedPack]
+                            if type(count) == "number" and count > 0 then
+                                Remotes.OpenPack:InvokeServer(PackSettings.SelectedPack, math.min(count, PackSettings.BatchCount))
+                            end
+                        end
+                    end
+                end)
+            end
+        end
+    end)
+
+    -- Auto Fuse & Equip Loop
+    task.spawn(function()
+        while task.wait(3.0) do
+            if MacUI.Unloaded then break end
+            if PackSettings.AutoFuseAll and Remotes and Remotes:FindFirstChild("FuseAll") then
+                pcall(function() Remotes.FuseAll:InvokeServer() end)
+            end
+            if PackSettings.AutoEquipBest and Remotes and Remotes:FindFirstChild("EquipBest") then
+                pcall(function() Remotes.EquipBest:InvokeServer() end)
+            end
+
+            -- Index Automation
+            if CardIndexSettings.AutoClaimIndex and Remotes and Remotes:FindFirstChild("ClaimIndex") then
+                pcall(function()
+                    local CardIndex = require(ReplicatedStorage.Shared.Rules.CardIndex)
+                    for _, rarity in ipairs(GetIndexRarities()) do
+                        if CardIndex.CanClaim(PlayerState.Data, rarity) and not (PlayerState.Data and PlayerState.Data.IndexClaims and PlayerState.Data.IndexClaims[rarity]) then
+                            Remotes.ClaimIndex:InvokeServer(rarity)
+                        end
+                    end
+                end)
+            end
+
+            -- Base Holders Automation
+            if BaseSettings.AutoFillHolders and Remotes and Remotes:FindFirstChild("BasePlace") and PlayerState and PlayerState.Data then
+                FillBestBaseHolders(0.1)
+            end
+
+            -- Bench Upgrade Automation
+            if BaseSettings.AutoUpgradeBench and Remotes and Remotes:FindFirstChild("BenchUpgrade") then
+                local ok, err = pcall(function()
+                    local BaseConfig = require(ReplicatedStorage.Shared.Config.BaseConfig)
+                    local Big = require(ReplicatedStorage.Shared.Util.Big)
+                    local data = PlayerState and PlayerState.Data
+                    local currentLevel = data and data.Base and data.Base.Bench
+                    if type(currentLevel) ~= "number" or data.Cash == nil then return end
+                    if currentLevel >= BaseConfig.BenchMaxLevel or currentLevel == lastRequestedBenchLevel then return end
+                    local cost = BaseConfig.BenchCost(currentLevel)
+                    if not Big.lt(data.Cash, cost) then
+                        lastRequestedBenchLevel = currentLevel
+                        Remotes.BenchUpgrade:FireServer()
+                    end
+                end)
+                if not ok then
+                    BaseSettings.AutoUpgradeBench = false
+                    warn("[Zero X] Auto Upgrade Workout Bench failed:", err)
+                    Window:Toast("Workout Bench", { Detail = "Upgrade stopped; check console for details." })
+                end
+            end
+
+            -- Shrine Sacrifice Automation
+            if ShrineSettings.AutoSacrificeCommons then
+                local ok, result, stop = pcall(SacrificeNextCard)
+                if not ok then
+                    ShrineSettings.AutoSacrificeCommons = false
+                    warn("[Zero X] Auto Sacrifice failed:", result)
+                    Window:Toast("Card Shrine", { Detail = "Auto Sacrifice stopped; check console." })
+                elseif result ~= "No eligible cards ready." and result ~= "A sacrifice request is already pending."
+                    and not MacUI.Unloaded then
+                    if stop then ShrineSettings.AutoSacrificeCommons = false end
+                    Window:Toast("Card Shrine", { Detail = result })
+                end
+            end
+        end
+    end)
+
+    -- Auto Train Bench Loop
+    task.spawn(function()
+        while task.wait(2.0) do
+            if MacUI.Unloaded then break end
+            if BaseSettings.AutoTrainBench then
+                pcall(function()
+                    if not LocalPlayer:GetAttribute("Lifting") then
+                        local function findMyBase()
+                            local bases = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Bases")
+                            for _, b in ipairs(bases and bases:GetChildren() or {}) do
+                                if b:GetAttribute("Owner") == LocalPlayer.UserId then
+                                    return b
+                                end
+                            end
+                            return nil
+                        end
+
+                        local root = GetRoot()
+                        local myBase = findMyBase()
+                        local liePoint = myBase and myBase:FindFirstChild("LiePoint", true)
+                        if root and not liePoint then
+                            local baseCF = WorldSupport.GetMyBaseCFrame()
+                            if baseCF and (root.Position - baseCF.Position).Magnitude > 40 then
+                                root.CFrame = baseCF * CFrame.new(0, 3.5, 0)
+                                task.wait(0.4)
+                                myBase = findMyBase()
+                                liePoint = myBase and myBase:FindFirstChild("LiePoint", true)
+                            end
+                        end
+                        root = GetRoot()
+                        if root and liePoint then
+                            if (root.Position - liePoint.Position).Magnitude > 8 then
+                                root.CFrame = liePoint.CFrame
+                                task.wait(0.3)
+                            end
+                            if Remotes:FindFirstChild("BenchStart") then
+                                Remotes.BenchStart:FireServer()
+                            end
+                        end
+                    end
+                end)
+            end
+        end
+    end)
+end
+
+--------------------------------------------------------------------------------
+-- UPGRADES & REBIRTH TAB
+--------------------------------------------------------------------------------
+do
+    local UpgradeSettings = {
+        AutoCarry = false,
+        AutoHealth = false,
+        AutoCrit = false,
+        AutoCash = false,
+        AutoCooldown = false,
+        AutoStreak = false,
+        AutoRebirth = false,
+    }
+
+    local UpgradeSection = Tabs.Upgrades:AddSection({ Title = "Stat Upgrades", Icon = "trending-up" })
+
+    local TreeSection = Tabs.Upgrades:AddSection({ Title = "Skill Tree", Icon = "git-branch" })
+    local treeEnabled = false
+    local treeGeneration = 0
+    local treePending = false
+    local treeAwaiting = nil
+    local treeAttempts = {}
+
+    TreeSection:AddToggle("AutoUpgradeSkillTree", {
+        Title = "Auto Upgrade Skill Tree",
+        Description = "ใช้ชาร์ดซื้อโหนดผังสกิลที่ปลดล็อกได้",
+        Default = false,
+        Callback = function(value)
+            treeEnabled = value
+            treeGeneration = treeGeneration + 1
+        end
+    })
+
+    task.spawn(function()
+        while task.wait(0.5) do
+            if MacUI.Unloaded then break end
+            if treeEnabled and not treePending then
+                local data = PlayerState and PlayerState.Data
+                local remote = Remotes and Remotes:FindFirstChild("TreeBuy")
+                if data and remote and remote:IsA("RemoteFunction") then
+                    local ok, shrine = pcall(function()
+                        return require(ReplicatedStorage.Shared.Rules.Shrine)
+                    end)
+                    if not ok or type(shrine) ~= "table" or type(shrine.Tree) ~= "table" or type(shrine.CantBuy) ~= "function" then
+                        treeEnabled = false
+                        Window:Toast("Skill Tree", { Detail = "Tree configuration unavailable; automation stopped." })
+                    else
+                        if treeAwaiting and type(data.TreeBought) == "table" and data.TreeBought[treeAwaiting] == true then
+                            treeAwaiting = nil
+                        end
+                        if not treeAwaiting then
+                            for _, node in ipairs(shrine.Tree) do
+                                if not treeEnabled or MacUI.Unloaded then break end
+                                local nodeId = type(node) == "table" and node.Id
+                                if type(nodeId) == "string" and not treeAttempts[nodeId]
+                                    and shrine.CantBuy(data, nodeId) == nil then
+                                    local generation = treeGeneration
+                                    treePending = true
+                                    treeAttempts[nodeId] = true
+                                    local requestOk, success, reason = pcall(function()
+                                        return remote:InvokeServer(nodeId)
+                                    end)
+                                    treePending = false
+                                    if requestOk and success == true then
+                                        treeAwaiting = nodeId
+                                    elseif generation == treeGeneration and not MacUI.Unloaded then
+                                        treeEnabled = false
+                                        Window:Toast("Skill Tree", { Detail = nodeId .. ": " .. tostring(requestOk and (reason or "rejected") or success) })
+                                    end
+                                    if generation ~= treeGeneration or MacUI.Unloaded then break end
+                                    break
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end)
+
+    UpgradeSection:AddToggle("AutoCarryToggle", {
+        Title = "Auto Upgrade Carry Capacity",
+        Description = "เพิ่มจำนวนแพ็กสูงสุดที่ถือได้",
+        Default = false,
+        Callback = function(val) UpgradeSettings.AutoCarry = val end
+    })
+
+    UpgradeSection:AddToggle("AutoHealthToggle", {
+        Title = "Auto Upgrade Health",
+        Description = "เพิ่มพลังชีวิตสูงสุดของผู้เล่น",
+        Default = false,
+        Callback = function(val) UpgradeSettings.AutoHealth = val end
+    })
+
+    UpgradeSection:AddToggle("AutoCritToggle", {
+        Title = "Auto Upgrade Crit Chance & Damage",
+        Description = "เพิ่มค่าคริติคอล",
+        Default = false,
+        Callback = function(val) UpgradeSettings.AutoCrit = val end
+    })
+
+    UpgradeSection:AddToggle("AutoCashToggle", {
+        Title = "Auto Upgrade Cash Multiplier",
+        Description = "เพิ่มเงินที่ได้รับจากการกำจัดศัตรู",
+        Default = false,
+        Callback = function(val) UpgradeSettings.AutoCash = val end
+    })
+
+    UpgradeSection:AddToggle("AutoCooldownToggle", {
+        Title = "Auto Upgrade Ability Cooldown",
+        Description = "ลดเวลารอสกิล",
+        Default = false,
+        Callback = function(val) UpgradeSettings.AutoCooldown = val end
+    })
+
+    UpgradeSection:AddToggle("AutoStreakToggle", {
+        Title = "Auto Upgrade Streak Time",
+        Description = "เพิ่มระยะเวลาต่อเนื่องของ Kill Streak",
+        Default = false,
+        Callback = function(val) UpgradeSettings.AutoStreak = val end
+    })
+
+    local RebirthSection = Tabs.Upgrades:AddSection({ Title = "Rebirth Progression", Icon = "refresh-cw" })
+
+    RebirthSection:AddToggle("AutoRebirthToggle", {
+        Title = "Auto Rebirth",
+        Description = "ส่งคำสั่งรีเบิร์ธอัตโนมัติ",
+        Default = false,
+        Callback = function(val) UpgradeSettings.AutoRebirth = val end
+    })
+
+    RebirthSection:AddButton({
+        Title = "Rebirth Now",
+        Description = "ส่งคำสั่งรีเบิร์ธ",
+        ButtonText = "Rebirth",
+        Style = "Primary",
+        Callback = function()
+            if Remotes and Remotes:FindFirstChild("Rebirth") then
+                local res = Remotes.Rebirth:InvokeServer()
+                Window:Toast("Rebirth", { Detail = res and "Rebirth Successful!" or "Not enough power/cash to rebirth" })
+            end
+        end
+    })
+
+    -- Upgrades Loop
+    task.spawn(function()
+        while task.wait(1.5) do
+            if MacUI.Unloaded then break end
+            if Remotes and Remotes:FindFirstChild("BuyUpgrade") then
+                if UpgradeSettings.AutoCarry then pcall(function() Remotes.BuyUpgrade:InvokeServer("Carry") end) end
+                if UpgradeSettings.AutoHealth then pcall(function() Remotes.BuyUpgrade:InvokeServer("Health") end) end
+                if UpgradeSettings.AutoCrit then pcall(function() Remotes.BuyUpgrade:InvokeServer("Crit") end) end
+                if UpgradeSettings.AutoCash then pcall(function() Remotes.BuyUpgrade:InvokeServer("Cash") end) end
+                if UpgradeSettings.AutoCooldown then pcall(function() Remotes.BuyUpgrade:InvokeServer("Cooldown") end) end
+                if UpgradeSettings.AutoStreak then pcall(function() Remotes.BuyUpgrade:InvokeServer("Streak") end) end
+            end
+            if UpgradeSettings.AutoRebirth and Remotes and Remotes:FindFirstChild("Rebirth") then
+                pcall(function() Remotes.Rebirth:InvokeServer() end)
+            end
+        end
+    end)
+end
+
+--------------------------------------------------------------------------------
+-- TELEPORTS TAB
+--------------------------------------------------------------------------------
+do
+    local TeleportSection = Tabs.Teleport:AddSection({ Title = "World Landmarks & Areas", Icon = "map" })
+
+    local locations = {
+        { Name = "Safe Zone / Lobby", GetCFrame = WorldSupport.GetSafeZoneCFrame },
+        {
+            Name = "My Base",
+            GetCFrame = function()
+                local cf = WorldSupport.GetMyBaseCFrame()
+                return cf and (cf * CFrame.new(0, 3.5, 0))
+            end
+        },
+    }
+
+    for _, zone in ipairs(WorldSupport.GetZones()) do
+        if zone.CFrame then
+            table.insert(locations, {
+                Name = zone.Name ~= zone.Key and (zone.Name .. " (" .. zone.Key .. ")") or zone.Name,
+                CFrame = zone.CFrame,
+            })
+        end
+    end
+
+    if WorldSupport.GetWorld() == 1 or workspace:FindFirstChild("CardShrine") then
+        table.insert(locations, {
+            Name = "Card Shrine",
+            GetCFrame = function()
+                local shrine = workspace:FindFirstChild("CardShrine")
+                if shrine then return shrine:GetPivot() * CFrame.new(0, 3.5, 6) end
+                return WorldSupport.GetWorld() == 1 and CFrame.new(2, 17, 196) or nil
+            end
+        })
+    end
+
+    if WorldSupport.IsDungeonAvailable() then
+        table.insert(locations, {
+            Name = "Dungeon Portal",
+            GetCFrame = function()
+                local portal = workspace:FindFirstChild("DungeonPortal")
+                if portal then return portal:GetPivot() * CFrame.new(0, 3.5, 0) end
+                return CFrame.new(154, 6, -70)
+            end
+        })
+    end
+
+    for _, loc in ipairs(locations) do
+        TeleportSection:AddButton({
+            Title = loc.Name,
+            ButtonText = "Teleport",
+            Callback = function()
+                local root = GetRoot()
+                local targetCF = loc.GetCFrame and loc.GetCFrame() or loc.CFrame
+                if root and typeof(targetCF) == "CFrame" then
+                    root.CFrame = targetCF
+                else
+                    Window:Toast("Teleport", { Detail = loc.Name .. " is not available right now." })
+                end
+            end
+        })
+    end
+
+    local PlayerTpSection = Tabs.Teleport:AddSection({ Title = "Teleport to Player", Icon = "users" })
+    local playerNames = {}
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer then table.insert(playerNames, p.Name) end
+    end
+    if #playerNames == 0 then table.insert(playerNames, "No other players") end
+
+    local selectedPlayer = playerNames[1]
+    local playerDropdown = PlayerTpSection:AddDropdown("PlayerTpDropdown", {
+        Title = "Choose Player",
+        Values = playerNames,
+        Default = selectedPlayer,
+        Callback = function(val) selectedPlayer = val end
+    })
+
+    PlayerTpSection:AddButton({
+        Title = "Teleport to Selected Player",
+        ButtonText = "Teleport",
+        Style = "Primary",
+        Callback = function()
+            local target = Players:FindFirstChild(selectedPlayer)
+            if target and target.Character and target.Character:FindFirstChild("HumanoidRootPart") then
+                local root = GetRoot()
+                if root then root.CFrame = target.Character.HumanoidRootPart.CFrame * CFrame.new(0, 3, 3) end
+            else
+                Window:Toast("Teleport", { Detail = "Player not found or dead" })
+            end
+        end
+    })
+
+    PlayerTpSection:AddButton({
+        Title = "Refresh Player List",
+        ButtonText = "Refresh",
+        Callback = function()
+            local updated = {}
+            for _, p in ipairs(Players:GetPlayers()) do
+                if p ~= LocalPlayer then table.insert(updated, p.Name) end
+            end
+            if #updated == 0 then table.insert(updated, "No other players") end
+            playerDropdown:SetValues(updated)
+        end
+    })
+end
+
+--------------------------------------------------------------------------------
+-- VISUALS TAB
+--------------------------------------------------------------------------------
+do
+    local VisualSettings = {
+        EnemyESP = false,
+        BossESP = false,
+        PlayerESP = false,
+    }
+
+    local ESPFolder = Instance.new("Folder")
+    ESPFolder.Name = "ZeroX_ESP"
+    ESPFolder.Parent = game:GetService("CoreGui")
+
+    local function ClearESP()
+        ESPFolder:ClearAllChildren()
+    end
+
+    local VisualSection = Tabs.Visuals:AddSection({ Title = "ESP & Highlights", Icon = "eye" })
+
+    VisualSection:AddToggle("EnemyESPToggle", {
+        Title = "Enemy ESP",
+        Description = "แสดงชื่อ ระยะทาง และพลังชีวิตของศัตรู",
+        Default = false,
+        Callback = function(val)
+            VisualSettings.EnemyESP = val
+            if not val then ClearESP() end
+        end
+    })
+
+    VisualSection:AddToggle("BossESPToggle", {
+        Title = "Boss Highlight ESP",
+        Description = "ไฮไลต์บอสด้วยสีส้ม",
+        Default = false,
+        Callback = function(val)
+            VisualSettings.BossESP = val
+            if not val then ClearESP() end
+        end
+    })
+
+    VisualSection:AddToggle("PlayerESPToggle", {
+        Title = "Player ESP",
+        Description = "แสดงกรอบและระยะห่างของผู้เล่นอื่น",
+        Default = false,
+        Callback = function(val)
+            VisualSettings.PlayerESP = val
+            if not val then ClearESP() end
+        end
+    })
+
+    -- ESP Render Loop
+    task.spawn(function()
+        while task.wait(0.5) do
+            if MacUI.Unloaded then
+                ClearESP()
+                ESPFolder:Destroy()
+                break
+            end
+
+            if not (VisualSettings.EnemyESP or VisualSettings.BossESP or VisualSettings.PlayerESP) then
+                ClearESP()
+                continue
+            end
+
+            local myRoot = GetRoot()
+            if not myRoot then continue end
+
+            -- 1. Enemy ESP
+            if VisualSettings.EnemyESP or VisualSettings.BossESP then
+                local enemies = workspace:FindFirstChild("Enemies")
+                if enemies then
+                    for _, enemy in ipairs(enemies:GetChildren()) do
+                        if enemy:IsA("Model") and not enemy:GetAttribute("Dead") then
+                            local enemyRoot = enemy.PrimaryPart or enemy:FindFirstChild("HumanoidRootPart")
+                            if enemyRoot then
+                                local isBoss = WorldSupport.IsEnemyBoss(enemy)
+                                if (VisualSettings.BossESP and isBoss) or (VisualSettings.EnemyESP and not isBoss) then
+                                    local espTag = ESPFolder:FindFirstChild("ESP_" .. enemy.Name .. "_" .. enemyRoot:GetDebugId())
+                                    if not espTag then
+                                        local hl = Instance.new("Highlight")
+                                        hl.Name = "ESP_" .. enemy.Name .. "_" .. enemyRoot:GetDebugId()
+                                        hl.Adornee = enemy
+                                        hl.FillColor = isBoss and Color3.fromRGB(255, 170, 0) or Color3.fromRGB(255, 60, 60)
+                                        hl.OutlineColor = Color3.fromRGB(255, 255, 255)
+                                        hl.FillTransparency = 0.6
+                                        hl.OutlineTransparency = 0.1
+                                        hl.Parent = ESPFolder
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+
+            -- 2. Player ESP
+            if VisualSettings.PlayerESP then
+                for _, p in ipairs(Players:GetPlayers()) do
+                    if p ~= LocalPlayer and p.Character then
+                        local char = p.Character
+                        local root = char:FindFirstChild("HumanoidRootPart")
+                        if root then
+                            local hl = ESPFolder:FindFirstChild("ESP_Player_" .. p.Name)
+                            if not hl then
+                                hl = Instance.new("Highlight")
+                                hl.Name = "ESP_Player_" .. p.Name
+                                hl.Adornee = char
+                                hl.FillColor = Color3.fromRGB(0, 160, 255)
+                                hl.OutlineColor = Color3.fromRGB(255, 255, 255)
+                                hl.FillTransparency = 0.5
+                                hl.OutlineTransparency = 0.2
+                                hl.Parent = ESPFolder
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end)
+
+    MacUI:OnUnload(function()
+        ClearESP()
+        pcall(function() ESPFolder:Destroy() end)
+    end)
+end
+
+--------------------------------------------------------------------------------
+-- MISC TAB
+--------------------------------------------------------------------------------
+do
+    local MiscSettings = {
+        AutoGroupGift = false,
+        AutoOfflineCash = false,
+        AutoSpamAbility = false,
+        AntiIdle = true,
+    }
+
+    local MiscSection = Tabs.Rewards:AddSection({ Title = "Free Rewards & Codes", Icon = "gift" })
+
+    local promoCode = ""
+    local promoPending = false
+
+    MiscSection:AddInput("PromoCodeInput", {
+        Title = "Promo Code",
+        Default = "",
+        Placeholder = "Enter a code",
+        Callback = function(value)
+            promoCode = type(value) == "string" and value or ""
+        end
+    })
+
+    MiscSection:AddButton({
+        Title = "Redeem Promo Code",
+        ButtonText = "Redeem",
+        Callback = function()
+            if promoPending then
+                Window:Toast("Promo Code", { Detail = "A redemption request is still pending." })
+                return
+            end
+            local code = string.upper(string.gsub(promoCode, "%s+", ""))
+            if code == "" then
+                Window:Toast("Promo Code", { Detail = "Enter a code first." })
+                return
+            end
+            local remote = Remotes and Remotes:FindFirstChild("PromoCode")
+            if not remote or not remote:IsA("RemoteFunction") then
+                Window:Toast("Promo Code", { Detail = "PromoCode remote unavailable." })
+                return
+            end
+            promoPending = true
+            local requestFinished = false
+            task.delay(10, function()
+                if not requestFinished and not MacUI.Unloaded then
+                    Window:Toast("Promo Code", { Detail = "Request still pending; wait for a response." })
+                end
+            end)
+            local ok, result = pcall(function() return remote:InvokeServer(code) end)
+            requestFinished = true
+            promoPending = false
+            if MacUI.Unloaded then return end
+            local detail
+            if not ok then
+                detail = "Request failed; redemption status is unknown."
+            elseif type(result) ~= "table" or type(result.Ok) ~= "boolean" then
+                detail = "Unexpected response; redemption status is unknown."
+            elseif result.Ok then
+                detail = "Code redeemed: " .. code
+            else
+                detail = "Code not redeemed: " .. tostring(result.Reason or "Unknown")
+            end
+            Window:Toast("Promo Code", { Detail = detail })
+        end
+    })
+
+    MiscSection:AddToggle("AutoGroupGiftToggle", {
+        Title = "Auto Claim Group Gift",
+        Description = "ส่งคำสั่งรับของขวัญสำหรับสมาชิกกลุ่ม",
+        Default = false,
+        Callback = function(val) MiscSettings.AutoGroupGift = val end
+    })
+
+    MiscSection:AddToggle("AutoOfflineCashToggle", {
+        Title = "Auto Collect Offline Cash",
+        Description = "ส่งคำสั่งรับเงินที่สะสมขณะออฟไลน์",
+        Default = false,
+        Callback = function(val) MiscSettings.AutoOfflineCash = val end
+    })
+
+    MiscSection:AddButton({
+        Title = "Claim All Free Gifts Now",
+        ButtonText = "Claim All",
+        Style = "Primary",
+        Callback = function()
+            if Remotes then
+                if Remotes:FindFirstChild("GroupGift") then pcall(function() Remotes.GroupGift:InvokeServer() end) end
+                if Remotes:FindFirstChild("OfflineCollect") then pcall(function() Remotes.OfflineCollect:InvokeServer() end) end
+            end
+            Window:Toast("Rewards", { Detail = "Claim requests dispatched" })
+        end
+    })
+
+    local CombatMiscSection = Tabs.Main:AddSection({ Title = "Abilities", Icon = "shield" })
+
+    CombatMiscSection:AddToggle("AutoSpamAbilityToggle", {
+        Title = "Auto Spam Equipped Abilities",
+        Description = "ส่งคำสั่งใช้สกิลของการ์ดที่สวมใส่",
+        Default = false,
+        Callback = function(val) MiscSettings.AutoSpamAbility = val end
+    })
+
+    local SessionSection = Tabs.Player:AddSection({ Title = "Session", Icon = "shield" })
+
+    SessionSection:AddToggle("AntiIdleToggle", {
+        Title = "Anti-AFK (Anti Idle Disconnect)",
+        Description = "ส่งการโต้ตอบเพื่อช่วยป้องกันการหลุดเมื่อไม่ใช้งาน",
+        Default = true,
+        Callback = function(val) MiscSettings.AntiIdle = val end
+    })
+
+    local CosmeticPotionSection = Tabs.Potions:AddSection({ Title = "Potions", Icon = "sparkles" })
+    local CosmeticSection = Tabs.Potions:AddSection({ Title = "Trails & Auras", Icon = "sparkles" })
+
+    local CosmeticSettings = {
+        AutoBuyPotions = false,
+        AutoUsePotions = false,
+        AutoEquipBestTrail = false,
+        AutoEquipBestAura = false,
+    }
+    local potionAttempts, cosmeticAttempts = {}, {}
+    local potionUseAttempts = {}
+    local potionBusy = false
+    local potionAttemptSlot = nil
+
+    local function ProcessPotionShop(mode)
+        if potionBusy then return "A potion request is already pending." end
+        local data = PlayerState and PlayerState.Data
+        local buy = Remotes and Remotes:FindFirstChild("BuyCosmetic")
+        local equip = Remotes and Remotes:FindFirstChild("EquipCosmetic")
+        local remote = mode == "use" and equip or buy
+        if not data or not remote or not remote:IsA("RemoteFunction") or type(data.Backpack) ~= "table" then
+            return "Potion state or remote unavailable.", true
+        end
+        local now = workspace:GetServerTimeNow()
+        local function invoke(remote, id, tier, signature)
+            potionBusy = true
+            if mode == "use" then
+                potionUseAttempts[id] = signature
+            else
+                potionAttempts[signature] = true
+            end
+            local ok, success, reason = pcall(function()
+                return remote:InvokeServer("Potion", id, tier)
+            end)
+            potionBusy = false
+            if not ok then return id .. ": request failed; result unknown (" .. tostring(success) .. ").", true end
+            if success ~= true then return id .. ": " .. tostring(reason or "request rejected or unknown"), true end
+            return id .. " tier " .. tostring(tier) .. ": request accepted."
+        end
+        local pendingUse = {}
+        if mode == "use" or mode == "buy" then
+            for key, count in pairs(data.Backpack) do
+                if type(key) == "string" and type(count) == "number" and count > 0 then
+                    local id, tierText = string.match(key, "^Potion|([%w_]+)|(%d+)$")
+                    local tier = tierText and tonumber(tierText)
+                    local active = id and type(data.Potions) == "table" and data.Potions[id]
+                    local ends = type(active) == "table" and active.Ends
+                    if id and tier and (active == nil or type(ends) == "number" and ends <= now) then
+                        pendingUse[id] = true
+                        local signature = "use:" .. key .. ":" .. tostring(count) .. ":" .. tostring(ends)
+                        if mode == "use" and potionUseAttempts[id] ~= signature then return invoke(equip, id, tier, signature) end
+                    end
+                end
+            end
+        end
+        if mode == "use" then return "No eligible potion available." end
+        local config = require(ReplicatedStorage.Shared.Config.CosmeticConfig)
+        local Big = require(ReplicatedStorage.Shared.Util.Big)
+        local slot = config.PotionShelf(data, now)
+        if type(slot) ~= "number" then return "Potion shop state unavailable.", true end
+        local stock = config.PotionStock(LocalPlayer.UserId, slot)
+        if type(stock) ~= "table" then return "Potion shop state unavailable.", true end
+        if potionAttemptSlot ~= slot then
+            for signature in pairs(potionAttempts) do
+                if string.sub(signature, 1, 4) == "buy:" then potionAttempts[signature] = nil end
+            end
+            potionAttemptSlot = slot
+        end
+        for _, item in ipairs(stock) do
+            local id = item.Type and item.Type.Id
+            local tier = item.Tier and item.Tier.Tier
+            local price = item.Tier and item.Tier.Price
+            local active = id and type(data.Potions) == "table" and data.Potions[id]
+            local ends = type(active) == "table" and active.Ends
+            if type(id) == "string" and type(tier) == "number" and price ~= nil and data.Cash ~= nil
+                and (mode == "manual" or not pendingUse[id] and (active == nil or type(ends) == "number" and ends <= now))
+                and config.PotionLeft(data, item, slot) > 0 and not Big.lt(data.Cash, price) then
+                local signature = "buy:" .. id .. ":" .. tostring(tier)
+                if not potionAttempts[signature] then return invoke(buy, id, tier, signature) end
+            end
+        end
+        return "No eligible potion available."
+    end
+
+    CosmeticPotionSection:AddToggle("AutoBuyPotionsToggle", {
+        Title = "Auto Buy Potions (Coins)",
+        Description = "ซื้อโพชั่นที่มีขายเมื่อเอฟเฟกต์หมด",
+        Default = false,
+        Callback = function(val)
+            CosmeticSettings.AutoBuyPotions = val
+        end
+    })
+
+    CosmeticPotionSection:AddToggle("AutoUsePotionsToggle", {
+        Title = "Auto Use Potions",
+        Description = "ใช้โพชั่นจากกระเป๋าเมื่อเอฟเฟกต์หมด",
+        Default = false,
+        Callback = function(val)
+            CosmeticSettings.AutoUsePotions = val
+        end
+    })
+
+    CosmeticSection:AddToggle("AutoEquipBestTrailToggle", {
+        Title = "Auto Equip Best Trail",
+        Description = "เลือกเส้นทางที่มีค่าความเร็วสูงสุดในคลัง",
+        Default = false,
+        Callback = function(val)
+            CosmeticSettings.AutoEquipBestTrail = val
+        end
+    })
+
+    CosmeticSection:AddToggle("AutoEquipBestAuraToggle", {
+        Title = "Auto Equip Best Aura",
+        Description = "เลือกออร่าที่มีตัวคูณสูงสุดในคลัง",
+        Default = false,
+        Callback = function(val)
+            CosmeticSettings.AutoEquipBestAura = val
+        end
+    })
+
+    CosmeticPotionSection:AddButton({
+        Title = "Buy Next Available Potion",
+        ButtonText = "Buy Potion",
+        Callback = function()
+            local ok, result = pcall(ProcessPotionShop, "manual")
+            if not MacUI.Unloaded then Window:Toast("Potions", { Detail = ok and result or tostring(result) }) end
+        end
+    })
+
+    local DungeonSection = Tabs.Dungeon:AddSection({ Title = "Dungeon Automation", Icon = "skull" })
+
+    local DungeonSettings = {
+        AutoEnterDungeon = false,
+        AutoFarmDungeonRooms = false,
+        DungeonKillAura = true,
+        DungeonOneHit = true,
+        DungeonRadius = 350,
+        AutoAdvanceRooms = true,
+        AutoBuyTrinkets = false,
+    }
+
+    DungeonSection:AddToggle("AutoEnterDungeonToggle", {
+        Title = "Auto Enter Dungeon Portal",
+        Description = "เทเลพอร์ตไปยังจุดประตูดันเจี้ยนเมื่ออยู่นอกดันเจี้ยน (World 2)",
+        Default = false,
+        Callback = function(val)
+            DungeonSettings.AutoEnterDungeon = val
+            if val and not WorldSupport.IsDungeonAvailable() then
+                DungeonSettings.AutoEnterDungeon = false
+                Window:Toast("Dungeon", { Detail = "Dungeon mode is only available in World 2!" })
+                task.defer(function()
+                    pcall(function()
+                        if Options.AutoEnterDungeonToggle and Options.AutoEnterDungeonToggle.SetValue then
+                            Options.AutoEnterDungeonToggle:SetValue(false)
+                        end
+                    end)
+                end)
+            end
+        end
+    })
+
+    DungeonSection:AddToggle("AutoFarmDungeonRoomsToggle", {
+        Title = "Auto Clear Dungeon Mobs",
+        Description = "เคลียร์ศัตรูในห้องและวาร์ปไปห้องถัดไปอัตโนมัติ",
+        Default = false,
+        Callback = function(val)
+            DungeonSettings.AutoFarmDungeonRooms = val
+        end
+    })
+
+    DungeonSection:AddToggle("DungeonKillAuraToggle", {
+        Title = "Dungeon Kill Aura",
+        Description = "โจมตีศัตรูรอบตัวทันที (Kill Aura รัศมี 350 สตัด)",
+        Default = true,
+        Callback = function(val)
+            DungeonSettings.DungeonKillAura = val
+        end
+    })
+
+    DungeonSection:AddToggle("DungeonOneHitToggle", {
+        Title = "One-Hit Kill",
+        Description = "กำจัดมอนสเตอร์ดันเจี้ยนใน 1 ฮิต (1e35 Damage)",
+        Default = true,
+        Callback = function(val)
+            DungeonSettings.DungeonOneHit = val
+        end
+    })
+
+    DungeonSection:AddToggle("AutoAdvanceRoomsToggle", {
+        Title = "Auto Advance Next Room",
+        Description = "วาร์ปไปจุดเริ่มต้นห้องถัดไปอัตโนมัติเมื่อห้องปัจจุบันเคลียร์แล้ว",
+        Default = true,
+        Callback = function(val)
+            DungeonSettings.AutoAdvanceRooms = val
+        end
+    })
+
+    DungeonSection:AddToggle("AutoBuyTrinketsToggle", {
+        Title = "Auto Buy Dungeon Trinkets",
+        Description = "ใช้โทเคนดันเจี้ยนซื้อเครื่องรางที่มี",
+        Default = false,
+        Callback = function(val)
+            DungeonSettings.AutoBuyTrinkets = val
+        end
+    })
+
+    DungeonSection:AddButton({
+        Title = "Exit Active Dungeon",
+        ButtonText = "Exit Dungeon",
+        Callback = function()
+            if Remotes and Remotes:FindFirstChild("Dungeon") then
+                Remotes.Dungeon:FireServer("Exit")
+                Window:Toast("Dungeon", { Detail = "Sent exit request" })
+            end
+        end
+    })
+
+    -- Anti Idle Hook
+    LocalPlayer.Idled:Connect(function()
+        if MiscSettings.AntiIdle then
+            pcall(function()
+                VirtualUser:CaptureController()
+                VirtualUser:ClickButton2(Vector2.new())
+            end)
+        end
+    end)
+
+    -- Misc Loops
+    task.spawn(function()
+        while task.wait(5.0) do
+            if MacUI.Unloaded then break end
+            if MiscSettings.AutoGroupGift and Remotes and Remotes:FindFirstChild("GroupGift") then
+                pcall(function() Remotes.GroupGift:InvokeServer() end)
+            end
+            if MiscSettings.AutoOfflineCash and Remotes and Remotes:FindFirstChild("OfflineCollect") then
+                pcall(function() Remotes.OfflineCollect:InvokeServer() end)
+            end
+        end
+    end)
+
+    task.spawn(function()
+        while task.wait(0.2) do
+            if MacUI.Unloaded then break end
+            if MiscSettings.AutoSpamAbility then
+                local root = GetRoot()
+                if root then
+                    local targetPos = root.Position + root.CFrame.LookVector * 30
+                    local bestDist = 150
+                    local enemies = workspace:FindFirstChild("Enemies")
+                    if enemies then
+                        for _, enemy in ipairs(enemies:GetChildren()) do
+                            if enemy:IsA("Model") and not enemy:GetAttribute("Dead") then
+                                local eRoot = enemy.PrimaryPart or enemy:FindFirstChild("HumanoidRootPart") or enemy:FindFirstChildWhichIsA("BasePart")
+                                if eRoot then
+                                    local dist = (eRoot.Position - root.Position).Magnitude
+                                    if dist < bestDist then
+                                        bestDist = dist
+                                        targetPos = eRoot.Position
+                                    end
+                                end
+                            end
+                        end
+                    end
+                    WorldSupport.CastEquippedAbilitiesAt(targetPos, false)
+                end
+            end
+        end
+    end)
+
+    -- Potions & Cosmetics Loop
+    task.spawn(function()
+        while task.wait(5.0) do
+            if MacUI.Unloaded then break end
+            local data = PlayerState and PlayerState.Data
+            if not data or not Remotes then continue end
+            local buy = Remotes:FindFirstChild("BuyCosmetic")
+            local equip = Remotes:FindFirstChild("EquipCosmetic")
+
+            if CosmeticSettings.AutoUsePotions then
+                local ok, result, stop = pcall(ProcessPotionShop, "use")
+                if not ok or stop then
+                    CosmeticSettings.AutoUsePotions = false
+                    if not MacUI.Unloaded then Window:Toast("Potions", { Detail = tostring(result) }) end
+                end
+            end
+
+            if CosmeticSettings.AutoBuyPotions and not MacUI.Unloaded then
+                local ok, result, stop = pcall(ProcessPotionShop, "buy")
+                if not ok or stop then
+                    CosmeticSettings.AutoBuyPotions = false
+                    if not MacUI.Unloaded then Window:Toast("Potions", { Detail = tostring(result) }) end
+                end
+            end
+
+            for _, kind in ipairs({ "Trail", "Aura" }) do
+                data = PlayerState and PlayerState.Data
+                if not data or MacUI.Unloaded then break end
+                local enabled = kind == "Trail" and CosmeticSettings.AutoEquipBestTrail
+                    or kind == "Aura" and CosmeticSettings.AutoEquipBestAura
+                if enabled and equip and equip:IsA("RemoteFunction") then
+                    local ok, err = pcall(function()
+                        local config = require(ReplicatedStorage.Shared.Config.CosmeticConfig)
+                        local kindConfig = config.Kinds and config.Kinds[kind]
+                        local owned = data[kind == "Trail" and "Trails" or "Auras"]
+                        if not kindConfig or type(kindConfig.ById) ~= "table" or type(owned) ~= "table" then
+                            error(kind .. " configuration or ownership unavailable")
+                        end
+                        local equipped = data[kind]
+                        local bestId, bestScore = nil, nil
+                        for id, isOwned in pairs(owned) do
+                            local item = isOwned == true and kindConfig.ById[id]
+                            local score = item and item[kind == "Trail" and "Speed" or "Multiplier"]
+                            if type(score) == "number" and (not bestScore or score > bestScore
+                                or (score == bestScore and id == equipped)) then
+                                bestId, bestScore = id, score
+                            end
+                        end
+                        if bestId == equipped then
+                            cosmeticAttempts[kind] = nil
+                        elseif bestId then
+                            local signature = tostring(equipped) .. "\0" .. bestId
+                            if cosmeticAttempts[kind] ~= signature then
+                                cosmeticAttempts[kind] = signature
+                                local success, reason = equip:InvokeServer(kind, bestId)
+                                if not success then error(tostring(reason or "Equip rejected")) end
+                            end
+                        end
+                    end)
+                    if not ok then
+                        if kind == "Trail" then CosmeticSettings.AutoEquipBestTrail = false else CosmeticSettings.AutoEquipBestAura = false end
+                        if not MacUI.Unloaded then Window:Toast(kind, { Detail = tostring(err) }) end
+                    end
+                end
+            end
+        end
+    end)
+
+    -- Dungeon Loop
+    do
+        local lastNudgeAt = 0
+
+        local function ZeroBodyVelocity(root)
+            if root and root:IsA("BasePart") then
+                root.AssemblyLinearVelocity = Vector3.zero
+                root.AssemblyAngularVelocity = Vector3.zero
+            end
+        end
+
+        local function IsPointInPartVolume(pos, part, xzMargin)
+            if not (part and part:IsA("BasePart")) then
+                return false
+            end
+            local rel = part.CFrame:PointToObjectSpace(pos)
+            local half = part.Size * 0.5
+            local margin = xzMargin or 2
+            return math.abs(rel.X) <= math.max(1, half.X - margin)
+                and math.abs(rel.Z) <= math.max(1, half.Z - margin)
+                and math.abs(rel.Y) <= (half.Y + 12)
+        end
+
+        local function GetExitPortalPositions(myRun)
+            local portals = {}
+            local bossPortals = workspace:FindFirstChild("BossPortals")
+            if bossPortals then
+                for _, portal in ipairs(bossPortals:GetChildren()) do
+                    local pPart = portal:IsA("BasePart") and portal
+                        or (portal:IsA("Model") and (portal.PrimaryPart or portal:FindFirstChildWhichIsA("BasePart")))
+                    if pPart then
+                        table.insert(portals, pPart.Position)
+                    elseif portal:IsA("Model") then
+                        table.insert(portals, portal:GetPivot().Position)
+                    end
+                end
+            end
+            local dungeonMaps = workspace:FindFirstChild("DungeonMaps")
+            if dungeonMaps then
+                for _, map in ipairs(dungeonMaps:GetChildren()) do
+                    local mRun = map:GetAttribute("Run")
+                    if myRun == nil or mRun == myRun or (mRun == nil and map.Name:match("^Run" .. tostring(myRun) .. "_")) then
+                        local ep = map:FindFirstChild("ExitPortal")
+                        if ep then
+                            local pos = ep:IsA("BasePart") and ep.Position or (ep:IsA("Model") and ep:GetPivot().Position)
+                            if pos then
+                                table.insert(portals, pos)
+                            end
+                        end
+                    end
+                end
+            end
+            return portals
+        end
+
+        local function IsNearAnyPortal(pos, portalPositions, safeRadius)
+            local radius = safeRadius or 22
+            for _, pPos in ipairs(portalPositions) do
+                if (Vector3.new(pos.X, 0, pos.Z) - Vector3.new(pPos.X, 0, pPos.Z)).Magnitude < radius then
+                    return true, pPos
+                end
+            end
+            return false, nil
+        end
+
+        local function ParseDungeonFloor(map)
+            local floorAttr = tonumber(map:GetAttribute("Floor"))
+            if floorAttr then
+                return floorAttr
+            end
+            return tonumber(
+                map.Name:match("_Floor_?(%d+)$")
+                    or map.Name:match("Floor_?(%d+)$")
+                    or map.Name:match("_(%d+)$")
+            )
+        end
+
+        local function CollectRunMaps(dungeonMaps, myRun)
+            local entries = {}
+            for _, map in ipairs(dungeonMaps:GetChildren()) do
+                if map:IsA("Model") or map:IsA("Folder") then
+                    local mapRun = map:GetAttribute("Run")
+                    local nameRun = tonumber(map.Name:match("^Run(%d+)_"))
+                    local belongs = false
+                    if myRun ~= nil then
+                        if mapRun ~= nil then
+                            belongs = (mapRun == myRun) or (tonumber(mapRun) == tonumber(myRun))
+                        elseif nameRun ~= nil then
+                            belongs = (nameRun == tonumber(myRun))
+                        else
+                            belongs = map.Name:find("Run" .. tostring(myRun) .. "_", 1, true) ~= nil
+                        end
+                    else
+                        belongs = true
+                    end
+
+                    if belongs then
+                        local floorNum = ParseDungeonFloor(map)
+                        if floorNum then
+                            table.insert(entries, {
+                                Map = map,
+                                Floor = floorNum,
+                                Bounds = map:FindFirstChild("Bounds"),
+                                Entry = map:FindFirstChild("Entry"),
+                                EntryDoor = map:FindFirstChild("EntryDoor"),
+                                ExitDoor = map:FindFirstChild("ExitDoor"),
+                                WalkCorridor = map:FindFirstChild("WalkCorridor"),
+                                WalkFloor = map:FindFirstChild("WalkFloor"),
+                                FloorPart = map:FindFirstChild("Floor"),
+                                BossSpot = map:FindFirstChild("BossSpot"),
+                            })
+                        end
+                    end
+                end
+            end
+            table.sort(entries, function(a, b) return a.Floor < b.Floor end)
+            return entries
+        end
+
+        local function GetStandY(entry)
+            if entry.WalkFloor and entry.WalkFloor:IsA("BasePart") then
+                return entry.WalkFloor.Position.Y + entry.WalkFloor.Size.Y * 0.5 + 3.2
+            elseif entry.FloorPart and entry.FloorPart:IsA("BasePart") then
+                return entry.FloorPart.Position.Y + entry.FloorPart.Size.Y * 0.5 + 3.2
+            elseif entry.Entry and entry.Entry:IsA("BasePart") then
+                return entry.Entry.Position.Y
+            end
+            return nil
+        end
+
+        local function MoveRootThroughWaypoints(root, humanoid, waypoints, portalPositions)
+            if #waypoints == 0 then
+                return false
+            end
+
+            -- Build segmented path so distance per step stays small (~30 studs) across floor -> corridor -> entry
+            local steps = {}
+            local cursor = root.Position
+            for _, wp in ipairs(waypoints) do
+                local safeWp = wp
+                local nearPortal, pPos = IsNearAnyPortal(safeWp, portalPositions, 22)
+                if nearPortal and pPos then
+                    local away = Vector3.new(safeWp.X - pPos.X, 0, safeWp.Z - pPos.Z)
+                    local dir = away.Magnitude > 0.1 and away.Unit or Vector3.new(0, 0, 1)
+                    safeWp = Vector3.new(pPos.X + dir.X * 24, safeWp.Y, pPos.Z + dir.Z * 24)
+                end
+
+                local delta = safeWp - cursor
+                local dist = delta.Magnitude
+                if dist > 1.5 then
+                    local subCount = math.max(1, math.ceil(dist / 30))
+                    for i = 1, subCount do
+                        local pt = cursor:Lerp(safeWp, i / subCount)
+                        local subNear = IsNearAnyPortal(pt, portalPositions, 20)
+                        if not subNear then
+                            table.insert(steps, pt)
+                        end
+                    end
+                    cursor = safeWp
+                end
+            end
+
+            if #steps == 0 then
+                table.insert(steps, waypoints[#waypoints])
+            end
+
+            if humanoid then
+                pcall(function()
+                    if humanoid.Sit then humanoid.Sit = false end
+                end)
+            end
+            root.Anchored = false
+
+            for idx, pt in ipairs(steps) do
+                if MacUI.Unloaded
+                    or not DungeonSettings.AutoAdvanceRooms
+                    or GetRoot() ~= root
+                    or not root.Parent
+                    or LocalPlayer:GetAttribute("DungeonRun") == nil
+                    or LocalPlayer:GetAttribute("DungeonFight") == true
+                    or LocalPlayer:GetAttribute("Downed") == true then
+                    return false
+                end
+
+                local lookTarget = steps[idx + 1] or waypoints[#waypoints]
+                local flatLook = Vector3.new(lookTarget.X, pt.Y, lookTarget.Z)
+                ZeroBodyVelocity(root)
+                if (flatLook - pt).Magnitude > 0.5 then
+                    root.CFrame = CFrame.lookAt(pt, flatLook)
+                else
+                    root.CFrame = CFrame.new(pt)
+                end
+                ZeroBodyVelocity(root)
+
+                if idx < #steps then
+                    task.wait(0.05)
+                end
+            end
+
+            if humanoid and humanoid.Parent and GetRoot() == root then
+                local finalGoal = steps[#steps]
+                pcall(function()
+                    humanoid:MoveTo(finalGoal)
+                end)
+            end
+            return true
+        end
+
+        local function AdvanceToNextDungeonRoom(root, humanoid, myRun, dungeonFloor)
+            local dungeonMaps = workspace:FindFirstChild("DungeonMaps")
+            local portalPositions = GetExitPortalPositions(myRun)
+
+            if dungeonMaps then
+                local entries = CollectRunMaps(dungeonMaps, myRun)
+                if #entries > 0 then
+                    -- Server increments DungeonFloor BEFORE the player walks into the new room
+                    -- (e.g. clearing Floor 20 sets DungeonFloor=21 while Run1_Floor21 spawns ahead).
+                    local targetEntry = nil
+                    local prevEntry = nil
+
+                    for idx, e in ipairs(entries) do
+                        if e.Floor == dungeonFloor then
+                            targetEntry = e
+                            prevEntry = idx > 1 and entries[idx - 1] or nil
+                            break
+                        end
+                    end
+
+                    -- Fallback if DungeonFloor wasn't incremented yet or room isn't in exact slot
+                    if not targetEntry then
+                        for idx, e in ipairs(entries) do
+                            if e.Floor > dungeonFloor and not IsPointInPartVolume(root.Position, e.Bounds, 3) then
+                                targetEntry = e
+                                prevEntry = idx > 1 and entries[idx - 1] or nil
+                                break
+                            end
+                        end
+                    end
+
+                    -- Last fallback: highest floor model for our run that we are not yet inside
+                    if not targetEntry then
+                        for idx = #entries, 1, -1 do
+                            local e = entries[idx]
+                            if not IsPointInPartVolume(root.Position, e.Bounds, 3) then
+                                targetEntry = e
+                                prevEntry = idx > 1 and entries[idx - 1] or nil
+                                break
+                            end
+                        end
+                    end
+
+                    if targetEntry then
+                        local standY = GetStandY(targetEntry) or root.Position.Y
+                        local insideTarget = IsPointInPartVolume(root.Position, targetEntry.Bounds, 4)
+
+                        local entryDoorOpen = not (targetEntry.EntryDoor and targetEntry.EntryDoor:IsA("BasePart"))
+                            or targetEntry.EntryDoor.CanCollide == false
+                            or targetEntry.EntryDoor:GetAttribute("Open") == true
+                        local prevExitOpen = not (prevEntry and prevEntry.ExitDoor and prevEntry.ExitDoor:IsA("BasePart"))
+                            or prevEntry.ExitDoor.CanCollide == false
+                            or prevEntry.ExitDoor:GetAttribute("Open") == true
+
+                        if not insideTarget then
+                            if not entryDoorOpen and not prevExitOpen then
+                                return false
+                            end
+
+                            local waypoints = {}
+                            if prevEntry and prevEntry.ExitDoor and prevEntry.ExitDoor:IsA("BasePart")
+                                and (prevEntry.ExitDoor.CanCollide == false or prevEntry.ExitDoor:GetAttribute("Open") == true) then
+                                local p = prevEntry.ExitDoor.Position
+                                table.insert(waypoints, Vector3.new(p.X, standY, p.Z))
+                            end
+
+                            if targetEntry.WalkCorridor and targetEntry.WalkCorridor:IsA("BasePart") then
+                                local wc = targetEntry.WalkCorridor
+                                local wcY = wc.Position.Y + wc.Size.Y * 0.5 + 3.2
+                                table.insert(waypoints, Vector3.new(wc.Position.X, wcY, wc.Position.Z))
+                            end
+
+                            if targetEntry.EntryDoor and targetEntry.EntryDoor:IsA("BasePart")
+                                and (targetEntry.EntryDoor.CanCollide == false or targetEntry.EntryDoor:GetAttribute("Open") == true) then
+                                local ed = targetEntry.EntryDoor.Position
+                                table.insert(waypoints, Vector3.new(ed.X, standY, ed.Z))
+                            end
+
+                            if targetEntry.Entry and targetEntry.Entry:IsA("BasePart") then
+                                local ep = targetEntry.Entry.Position
+                                table.insert(waypoints, Vector3.new(ep.X, standY, ep.Z))
+                            end
+
+                            if targetEntry.WalkFloor and targetEntry.WalkFloor:IsA("BasePart") then
+                                local wf = targetEntry.WalkFloor.Position
+                                local walkPos = Vector3.new(wf.X, standY, wf.Z)
+                                if targetEntry.Entry and targetEntry.Entry:IsA("BasePart") then
+                                    walkPos = targetEntry.Entry.Position:Lerp(walkPos, 0.45)
+                                    walkPos = Vector3.new(walkPos.X, standY, walkPos.Z)
+                                end
+                                table.insert(waypoints, walkPos)
+                            elseif targetEntry.BossSpot and targetEntry.BossSpot:IsA("BasePart") then
+                                local bs = targetEntry.BossSpot.Position
+                                table.insert(waypoints, Vector3.new(bs.X, standY, bs.Z))
+                            elseif targetEntry.Map:IsA("Model") then
+                                local pv = targetEntry.Map:GetPivot().Position
+                                table.insert(waypoints, Vector3.new(pv.X, standY, pv.Z))
+                            end
+
+                            if #waypoints > 0 then
+                                lastNudgeAt = os.clock()
+                                return MoveRootThroughWaypoints(root, humanoid, waypoints, portalPositions)
+                            end
+                        elseif (os.clock() - lastNudgeAt) >= 0.9 then
+                            -- Already inside Bounds while DungeonFight is still false:
+                            -- step gently toward WalkFloor / Entry in case room trigger waits further inside
+                            local centerTarget = nil
+                            if targetEntry.WalkFloor and targetEntry.WalkFloor:IsA("BasePart") then
+                                local wf = targetEntry.WalkFloor.Position
+                                centerTarget = Vector3.new(wf.X, standY, wf.Z)
+                            elseif targetEntry.Entry and targetEntry.Entry:IsA("BasePart") then
+                                local ep = targetEntry.Entry.Position
+                                centerTarget = Vector3.new(ep.X, standY, ep.Z)
+                            end
+                            if centerTarget and (root.Position - centerTarget).Magnitude > 6 then
+                                local nearPortal = IsNearAnyPortal(centerTarget, portalPositions, 22)
+                                if not nearPortal then
+                                    lastNudgeAt = os.clock()
+                                    return MoveRootThroughWaypoints(root, humanoid, { centerTarget }, portalPositions)
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+
+            -- Safety avoidance against HomePortal/ExitPortal when no target room moved us
+            local nearPortal, pPos = IsNearAnyPortal(root.Position, portalPositions, 22)
+            if nearPortal and pPos and GetRoot() == root and root.Parent then
+                local away = Vector3.new(root.Position.X - pPos.X, 0, root.Position.Z - pPos.Z)
+                local dir = away.Magnitude > 0.1 and away.Unit or Vector3.new(1, 0, 0)
+                local safePos = Vector3.new(pPos.X + dir.X * 26, root.Position.Y, pPos.Z + dir.Z * 26)
+                ZeroBodyVelocity(root)
+                root.CFrame = CFrame.new(safePos)
+            end
+            return false
+        end
+
+        task.spawn(function()
+            while task.wait(0.2) do
+                if MacUI.Unloaded then break end
+                local root = GetRoot()
+                local myRun = LocalPlayer:GetAttribute("DungeonRun")
+                local inDungeon = myRun ~= nil
+
+                -- 1. Auto Enter Portal (World 2 only)
+                if DungeonSettings.AutoEnterDungeon and not inDungeon and root then
+                    local portal = workspace:FindFirstChild("DungeonPortal")
+                    if not portal and not WorldSupport.IsDungeonAvailable() then
+                        DungeonSettings.AutoEnterDungeon = false
+                        Window:Toast("Dungeon", { Detail = "Dungeon mode is only available in World 2!" })
+                        pcall(function()
+                            if Options.AutoEnterDungeonToggle and Options.AutoEnterDungeonToggle.SetValue then
+                                Options.AutoEnterDungeonToggle:SetValue(false)
+                            end
+                        end)
+                    end
+                    local humanoid = GetHumanoid()
+                    if portal and portal:IsA("Model") and humanoid and humanoid.Health > 0 then
+                        local center = portal:GetPivot().Position
+                        local radius = tonumber(portal:GetAttribute("Radius")) or 11
+                        local offset = root.Position - center
+                        local inside = Vector3.new(offset.X, 0, offset.Z).Magnitude <= radius and math.abs(offset.Y) < 12
+                        if not inside and DungeonSettings.AutoEnterDungeon and LocalPlayer:GetAttribute("DungeonRun") == nil
+                            and GetRoot() == root and root.Parent then
+                            ZeroBodyVelocity(root)
+                            root.CFrame = CFrame.new(center + Vector3.new(0, 3, 0))
+                        end
+                    end
+                end
+
+                -- 2. Auto Clear Mobs in Dungeon (Kill Aura + 1-Hit / Abilities + Auto Advance)
+                if inDungeon and root and LocalPlayer:GetAttribute("Downed") ~= true then
+                    pcall(function()
+                        local dungeonFight = LocalPlayer:GetAttribute("DungeonFight") == true
+                        local dungeonFloor = tonumber(LocalPlayer:GetAttribute("DungeonFloor")) or 1
+                        local enemyContainer = workspace:FindFirstChild("Enemies")
+
+                        if dungeonFight and DungeonSettings.AutoFarmDungeonRooms and enemyContainer then
+                            local validTargets = {}
+                            local currentPos = root.Position
+                            local maxRadius = tonumber(DungeonSettings.DungeonRadius) or 350
+
+                            for _, enemy in ipairs(enemyContainer:GetChildren()) do
+                                if enemy:IsA("Model") and not enemy:GetAttribute("Dead") then
+                                    local enemyRun = enemy:GetAttribute("Dungeon")
+                                    if enemyRun == nil or enemyRun == myRun then
+                                        local hum = enemy:FindFirstChildOfClass("Humanoid")
+                                        local eRoot = enemy.PrimaryPart
+                                            or enemy:FindFirstChild("HumanoidRootPart")
+                                            or enemy:FindFirstChild("SimRoot", true)
+                                        if (not hum or hum.Health > 0) and eRoot and eRoot:IsA("BasePart") then
+                                            local dist = (eRoot.Position - currentPos).Magnitude
+                                            if dist <= maxRadius or enemyRun == myRun then
+                                                table.insert(validTargets, {
+                                                    Model = enemy,
+                                                    Root = eRoot,
+                                                    Dist = dist,
+                                                    IsLocal = LocalEnemyRegistry
+                                                        and type(LocalEnemyRegistry.Is) == "function"
+                                                        and LocalEnemyRegistry.Is(enemy) == true,
+                                                })
+                                            end
+                                        end
+                                    end
+                                end
+                            end
+
+                            table.sort(validTargets, function(a, b) return a.Dist < b.Dist end)
+                            local dmg = DungeonSettings.DungeonOneHit and 1e35 or 1e12
+
+                            if #validTargets > 0 then
+                                for _, target in ipairs(validTargets) do
+                                    if MacUI.Unloaded or not DungeonSettings.AutoFarmDungeonRooms
+                                        or GetRoot() ~= root or not root.Parent
+                                        or LocalPlayer:GetAttribute("DungeonRun") == nil
+                                        or LocalPlayer:GetAttribute("DungeonFight") ~= true
+                                        or LocalPlayer:GetAttribute("Downed") == true then
+                                        break
+                                    end
+
+                                    if target.Model and target.Model.Parent and not target.Model:GetAttribute("Dead")
+                                        and target.Root and target.Root.Parent then
+                                        local tPos = target.Root.Position
+                                        if DungeonSettings.DungeonKillAura then
+                                            local standPos = tPos + Vector3.new(0, 4.5, 0)
+                                            ZeroBodyVelocity(root)
+                                            root.CFrame = CFrame.lookAt(standPos, tPos)
+                                            ZeroBodyVelocity(root)
+                                        end
+
+                                        if target.IsLocal then
+                                            DamageEnemy(target.Model, dmg)
+                                        else
+                                            WorldSupport.CastEquippedAbilitiesAt(tPos, DungeonSettings.DungeonOneHit)
+                                        end
+
+                                        if DungeonSettings.DungeonKillAura then
+                                            task.wait(0.05)
+                                        end
+                                    end
+                                end
+                            end
+                        elseif not dungeonFight and DungeonSettings.AutoAdvanceRooms then
+                            AdvanceToNextDungeonRoom(root, GetHumanoid(), myRun, dungeonFloor)
+                        end
+                    end)
+                end
+
+                -- 3. Auto Buy Trinkets with Tokens
+                if DungeonSettings.AutoBuyTrinkets and Remotes and Remotes:FindFirstChild("DungeonBuy") then
+                    pcall(function()
+                        local data = PlayerState and PlayerState.Data
+                        if not data then return end
+                        local DungeonConfig = require(ReplicatedStorage.Shared.Config.DungeonConfig)
+                        local offers = type(DungeonConfig.Offers) == "function" and DungeonConfig.Offers() or {}
+                        for _, offer in ipairs(offers) do
+                            if not DungeonSettings.AutoBuyTrinkets or MacUI.Unloaded then break end
+                            if offer.Kind == "Trinket" and type(DungeonConfig.CanBuy) == "function"
+                                and DungeonConfig.CanBuy(data, offer.Id) then
+                                Remotes.DungeonBuy:InvokeServer(offer.Id)
+                                task.wait(0.25)
+                            end
+                        end
+                    end)
+                end
+            end
+        end)
+    end
+end
+
+--------------------------------------------------------------------------------
+-- PLAYER TAB (Client utilities)
+--------------------------------------------------------------------------------
+do
+    local RunService = game:GetService("RunService")
+    local Lighting = game:GetService("Lighting")
+    local PromptService = game:GetService("ProximityPromptService")
+
+    local state = {
+        WalkSpeed = false,
+        Speed = 32,
+        InfiniteJump = false,
+        Noclip = false,
+        InstantPrompt = false,
+        Fly = false,
+        FlySpeed = 60,
+        FPSBoost = false,
+        UltraFPSBoost = false,
+        DisableAnimations = false,
+    }
+
+    local alive = true
+    local connections = {}
+    local flight
+    local motionConnection
+
+    local function Connect(signal, callback)
+        local connection = signal:Connect(callback)
+        table.insert(connections, connection)
+        return connection
+    end
+
+    local Movement = Tabs.Player:AddSection({ Title = "Movement", Icon = "gauge" })
+
+    Movement:AddToggle("WalkSpeedEnabled", {
+        Title = "Enable Custom Speed",
+        Description = "ใช้ความเร็วเดินตามค่าที่เลือกด้านล่าง",
+        Default = false,
+        Callback = function(enabled)
+            state.WalkSpeed = enabled
+            local hum = GetHumanoid()
+            if hum then hum.WalkSpeed = enabled and state.Speed or 16 end
+        end,
+    })
+
+    Movement:AddSlider("WalkSpeedAmount", {
+        Title = "WalkSpeed",
+        Min = 16,
+        Max = 200,
+        Default = 32,
+        Increment = 1,
+        Callback = function(speed)
+            state.Speed = speed
+            if state.WalkSpeed then
+                local hum = GetHumanoid()
+                if hum then hum.WalkSpeed = speed end
+            end
+        end,
+    })
+
+    Movement:AddToggle("InfiniteJumpEnabled", {
+        Title = "Infinite Jump",
+        Description = "ส่งคำสั่งกระโดดได้แม้ตัวละครอยู่กลางอากาศ",
+        Default = false,
+        Callback = function(enabled) state.InfiniteJump = enabled end,
+    })
+
+    Movement:AddToggle("NoclipEnabled", {
+        Title = "Noclip",
+        Description = "ปิดการชนของชิ้นส่วนตัวละครขณะเปิดใช้งาน",
+        Default = false,
+        Callback = function(enabled) state.Noclip = enabled end,
+    })
+
+    -- Flight
+    local FlySection = Tabs.Player:AddSection({ Title = "Flight", Icon = "plane" })
+
+    local function StartFlight()
+        local root = GetRoot()
+        local hum = GetHumanoid()
+        if not root or not hum then return end
+
+        local camera = workspace.CurrentCamera
+        local bodyGyro = Instance.new("BodyGyro")
+        bodyGyro.P = 9e4
+        bodyGyro.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
+        bodyGyro.CFrame = root.CFrame
+        bodyGyro.Parent = root
+
+        local bodyVelocity = Instance.new("BodyVelocity")
+        bodyVelocity.Velocity = Vector3.zero
+        bodyVelocity.MaxForce = Vector3.new(9e9, 9e9, 9e9)
+        bodyVelocity.Parent = root
+
+        flight = { Gyro = bodyGyro, Velocity = bodyVelocity }
+
+        motionConnection = RunService.RenderStepped:Connect(function()
+            if not flight or not root.Parent then return end
+            flight.Gyro.CFrame = camera.CFrame
+            local direction = Vector3.zero
+            if UserInputService:IsKeyDown(Enum.KeyCode.W) then direction = direction + camera.CFrame.LookVector end
+            if UserInputService:IsKeyDown(Enum.KeyCode.S) then direction = direction - camera.CFrame.LookVector end
+            if UserInputService:IsKeyDown(Enum.KeyCode.A) then direction = direction - camera.CFrame.RightVector end
+            if UserInputService:IsKeyDown(Enum.KeyCode.D) then direction = direction + camera.CFrame.RightVector end
+            if UserInputService:IsKeyDown(Enum.KeyCode.Space) then direction = direction + Vector3.new(0, 1, 0) end
+            if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then direction = direction - Vector3.new(0, 1, 0) end
+
+            if direction.Magnitude > 0 then
+                flight.Velocity.Velocity = direction.Unit * state.FlySpeed
+            else
+                flight.Velocity.Velocity = Vector3.zero
+            end
+        end)
+    end
+
+    local function StopFlight()
+        if motionConnection then motionConnection:Disconnect(); motionConnection = nil end
+        if flight then
+            if flight.Gyro then flight.Gyro:Destroy() end
+            if flight.Velocity then flight.Velocity:Destroy() end
+            flight = nil
+        end
+    end
+
+    FlySection:AddToggle("FlyEnabled", {
+        Title = "Enable Fly",
+        Description = "ควบคุมการบินของตัวละครด้วยความเร็วที่กำหนด",
+        Default = false,
+        Callback = function(enabled)
+            state.Fly = enabled
+            if enabled then StartFlight() else StopFlight() end
+        end
+    })
+
+    FlySection:AddSlider("FlySpeedSlider", {
+        Title = "Fly Speed",
+        Min = 20,
+        Max = 250,
+        Default = 60,
+        Increment = 5,
+        Callback = function(val) state.FlySpeed = val end
+    })
+
+    -- Noclip & Loop checks
+    Connect(RunService.Stepped, function()
+        if state.Noclip and LocalPlayer.Character then
+            for _, part in ipairs(LocalPlayer.Character:GetDescendants()) do
+                if part:IsA("BasePart") and part.CanCollide then
+                    part.CanCollide = false
+                end
+            end
+        end
+        if state.WalkSpeed then
+            local hum = GetHumanoid()
+            if hum and hum.WalkSpeed ~= state.Speed then hum.WalkSpeed = state.Speed end
+        end
+    end)
+
+    Connect(UserInputService.JumpRequest, function()
+        if state.InfiniteJump then
+            local hum = GetHumanoid()
+            if hum then hum:ChangeState(Enum.HumanoidStateType.Jumping) end
+        end
+    end)
+
+    -- Performance
+    local Performance = Tabs.Player:AddSection({ Title = "Performance", Icon = "zap" })
+
+    Performance:AddToggle("FPSBoostEnabled", {
+        Title = "FPS Boost (Reduce Quality)",
+        Description = "ลดคุณภาพการแสดงผลและปิดเงาเพื่อลดภาระการประมวลผล",
+        Default = false,
+        Callback = function(enabled)
+            state.FPSBoost = enabled
+            if enabled then
+                pcall(function()
+                    settings().Rendering.QualityLevel = 1
+                    Lighting.GlobalShadows = false
+                end)
+            end
+        end
+    })
+
+    MacUI:OnUnload(function()
+        alive = false
+        StopFlight()
+        for _, c in ipairs(connections) do c:Disconnect() end
+        table.clear(connections)
+    end)
+end
+
+--------------------------------------------------------------------------------
+-- OVERHEAD NAME BADGE
+--------------------------------------------------------------------------------
+do
+    local TARGET_NAME = "ZERO X SCRIPTHUB"
+    local alive = true
+    local queued = false
+    local character
+    local playerConnections = {}
+    local characterConnections = {}
+    local labels = {}
+
+    local function DisconnectAll(list)
+        for _, connection in ipairs(list) do connection:Disconnect() end
+        table.clear(list)
+    end
+
+    local function EscapeRichText(value)
+        return (value:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;"))
+    end
+
+    local function NameTexts()
+        local tag = LocalPlayer:GetAttribute("GuildTag")
+        if type(tag) ~= "string" or tag == "" then
+            return TARGET_NAME, EscapeRichText(TARGET_NAME)
+        end
+        local color = LocalPlayer:GetAttribute("GuildColor")
+        local hex = typeof(color) == "Color3" and color:ToHex() or "8D89ED"
+        return "[" .. tag .. "] " .. TARGET_NAME,
+            '<font color="#' .. hex .. '">[' .. EscapeRichText(tag) .. ']</font> ' .. EscapeRichText(TARGET_NAME)
+    end
+
+    local function ReleaseLabel(label, record)
+        record.Connection:Disconnect()
+        pcall(function()
+            if label.Text == record.Expected then label.Text = record.Original end
+        end)
+        labels[label] = nil
+    end
+
+    local function ClearLabels()
+        for label, record in pairs(labels) do ReleaseLabel(label, record) end
+    end
+
+    local Refresh
+    local function ScheduleRefresh()
+        if not alive or queued then return end
+        queued = true
+        task.defer(function()
+            queued = false
+            if alive then Refresh() end
+        end)
+    end
+
+    Refresh = function()
+        local overhead = character and character:FindFirstChild("OverHead")
+        if overhead and not overhead:IsA("BillboardGui") then overhead = nil end
+        local main = overhead and overhead:FindFirstChild("Main")
+        local display = main and main:FindFirstChild("DisplayName")
+        local shadow = display and display:FindFirstChild("TxtShadow")
+        local front = shadow and shadow:FindFirstChild("Txt")
+        local plainText, richText = NameTexts()
+        local wanted = {}
+
+        if shadow and shadow:IsA("TextLabel") then wanted[shadow] = plainText end
+        if front and front:IsA("TextLabel") then wanted[front] = front.RichText and richText or plainText end
+
+        for label, record in pairs(labels) do
+            if wanted[label] == nil then ReleaseLabel(label, record) end
+        end
+
+        for label, text in pairs(wanted) do
+            local record = labels[label]
+            if not record then
+                record = { Original = label.Text }
+                labels[label] = record
+                record.Connection = label:GetPropertyChangedSignal("Text"):Connect(function()
+                    if not alive or labels[label] ~= record then return end
+                    if label.Text ~= record.Expected then
+                        record.Original = label.Text
+                        ScheduleRefresh()
+                    end
+                end)
+            elseif label.Text ~= record.Expected then
+                record.Original = label.Text
+            end
+            record.Expected = text
+            if label.Text ~= text then label.Text = text end
+        end
+    end
+
+    local function BindCharacter(nextCharacter)
+        DisconnectAll(characterConnections)
+        ClearLabels()
+        character = nextCharacter
+        if character then
+            table.insert(characterConnections, character.DescendantAdded:Connect(ScheduleRefresh))
+            table.insert(characterConnections, character.DescendantRemoving:Connect(ScheduleRefresh))
+        end
+        ScheduleRefresh()
+    end
+
+    table.insert(playerConnections, LocalPlayer.CharacterAdded:Connect(BindCharacter))
+    table.insert(playerConnections, LocalPlayer.CharacterRemoving:Connect(function(oldCharacter)
+        if character == oldCharacter then BindCharacter(nil) end
+    end))
+    table.insert(playerConnections, LocalPlayer:GetAttributeChangedSignal("GuildTag"):Connect(ScheduleRefresh))
+    table.insert(playerConnections, LocalPlayer:GetAttributeChangedSignal("GuildColor"):Connect(ScheduleRefresh))
+
+    MacUI:OnUnload(function()
+        alive = false
+        DisconnectAll(playerConnections)
+        DisconnectAll(characterConnections)
+        ClearLabels()
+        character = nil
+    end)
+
+    BindCharacter(LocalPlayer.Character)
+end
+
+--------------------------------------------------------------------------------
+-- CONFIGURATION & AUTO-EXECUTE
+--------------------------------------------------------------------------------
+
+ThemeManager:SetLibrary(MacUI)
+ThemeManager:SetFolder("ZeroX")
+ThemeManager:LoadCustomThemes()
+
+InterfaceManager:SetLibrary(MacUI)
+InterfaceManager:SetFolder("ZeroX")
+InterfaceManager:BuildInterfaceSection(Tabs.Appearance)
+
+SaveManager:SetLibrary(MacUI)
+SaveManager:SetFolder("ZeroX/" .. tostring(game.GameId))
+SaveManager:IgnoreThemeSettings()
+SaveManager:BuildConfigSection(Tabs.Profiles)
+
+do
+    local LOADER_URL = "https://raw.githubusercontent.com/MomoHub007/ZeroX-Best-Script/refs/heads/main/loader.lua"
+    local env = type(getgenv) == "function" and getgenv() or _G
+    local queueFn = env.queue_on_teleport or env.queueonteleport
+    local flagFile = "ZeroX/AutoExecute/" .. tostring(game.GameId) .. ".txt"
+    local runtimeKey = "__ZEROX_AUTO_EXECUTE_V1"
+    local runtime = env[runtimeKey]
+
+    if type(runtime) ~= "table" then
+        runtime = {}
+        env[runtimeKey] = runtime
+    end
+
+    if runtime.Connection then
+        runtime.Connection:Disconnect()
+        runtime.Connection = nil
+    end
+
+    local owner = {}
+    runtime.Owner = owner
+    runtime.Enabled = false
+    local active = true
+
+    local section = Tabs.Profiles:AddSection({ Title = "Auto Execute", Icon = "play" })
+    local status = section:AddLabel({ Title = "Status", Value = "Disabled" })
+
+    local function OwnsRuntime()
+        return active and runtime.Owner == owner
+    end
+
+    local function SetStatus(message, isError)
+        if not OwnsRuntime() then return end
+        status:SetValue(message)
+        if isError then Window:Toast("Auto Execute", { Detail = tostring(message) }) end
+    end
+
+    local function WriteFlag(enabled)
+        if type(env.makefolder) ~= "function" or type(env.isfile) ~= "function" or type(env.readfile) ~= "function" or type(env.writefile) ~= "function" or type(env.isfolder) ~= "function" then
+            return false, "Executor filesystem APIs unavailable"
+        end
+        return pcall(function()
+            for _, folder in ipairs({ "ZeroX", "ZeroX/AutoExecute" }) do
+                if not env.isfolder(folder) then env.makefolder(folder) end
+            end
+            local value = enabled and "1" or "0"
+            env.writefile(flagFile, value)
+            assert(env.readfile(flagFile) == value, "Verification failed")
+        end)
+    end
+
+    local initialEnabled = false
+    if type(env.isfile) == "function" and type(env.readfile) == "function" then
+        local ok, value = pcall(function() return env.isfile(flagFile) and env.readfile(flagFile) == "1" end)
+        initialEnabled = ok and value == true
+    end
+
+    local payload = string.format([=[
+local env = type(getgenv) == "function" and getgenv() or _G
+local ok, enabled = pcall(function()
+    return type(env.isfile) == "function" and type(env.readfile) == "function" and env.isfile(%q) and env.readfile(%q) == "1"
+end)
+if not ok or not enabled then return end
+if not game:IsLoaded() then game.Loaded:Wait() end
+if env.__ZEROX_MULTI_GAME_LOADER or env.__ZEROX_AUTO_EXECUTE_LOADING then return end
+env.__ZEROX_AUTO_EXECUTE_LOADING = true
+local ran, err = pcall(function()
+    if env.readfile(%q) ~= "1" then return end
+    local source = game:HttpGet(%q)
+    assert(type(source) == "string" and source:match("%%S"), "Loader response is empty")
+    local chunk, compileError = loadstring(source, "ZeroXAutoExecute")
+    assert(chunk, compileError)
+    chunk()
+end)
+env.__ZEROX_AUTO_EXECUTE_LOADING = nil
+if not ran then warn("[Zero X / Auto Execute] " .. tostring(err)) end
+]=], flagFile, flagFile, flagFile, LOADER_URL)
+
+    local function QueueLoader()
+        if not OwnsRuntime() or not runtime.Enabled then return end
+        if runtime.Queued then SetStatus("Loader already queued"); return end
+        if type(queueFn) ~= "function" then SetStatus("Teleport queue API unavailable", true); return end
+        local queued, queueError = pcall(queueFn, payload)
+        if queued then
+            runtime.Queued = true
+            SetStatus("Loader queued - ready for teleport")
+        else
+            SetStatus("Queue failed: " .. tostring(queueError), true)
+        end
+    end
+
+    local function ApplyEnabled(enabled)
+        if not OwnsRuntime() then return end
+        runtime.Enabled = enabled
+        local ok, err = WriteFlag(enabled)
+        if not ok then SetStatus("Setting write failed: " .. tostring(err), true); return end
+        if enabled then QueueLoader() else SetStatus("Disabled") end
+    end
+
+    local toggle = section:AddToggle("ZeroXAutoExecute", {
+        Title = "Auto Execute",
+        Description = "รันสคริปต์อีกครั้งเมื่อเทเลพอร์ตหรือย้ายเซิร์ฟเวอร์",
+        Default = initialEnabled,
+        Callback = ApplyEnabled,
+    })
+
+    ApplyEnabled(toggle.Value)
+
+    runtime.Connection = LocalPlayer.OnTeleport:Connect(function(teleportState)
+        if not OwnsRuntime() or not runtime.Enabled then return end
+        if teleportState ~= Enum.TeleportState.Started then return end
+        local saved, saveError = WriteFlag(true)
+        if not saved then SetStatus("Cannot queue: " .. tostring(saveError), true); return end
+        QueueLoader()
+    end)
+
+    MacUI:OnUnload(function()
+        if runtime.Owner ~= owner then return end
+        active = false
+        runtime.Enabled = false
+        if runtime.Connection then runtime.Connection:Disconnect(); runtime.Connection = nil end
+        pcall(WriteFlag, false)
+    end)
+end
+
+SaveManager:LoadAutoloadConfig()
+
+if Options.ZeroXHideOnStart and Options.ZeroXHideOnStart.Value then
+    Window:Minimize()
+end
