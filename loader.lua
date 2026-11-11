@@ -10,6 +10,7 @@ local Scripts = {
     [10769401924] = "https://raw.githubusercontent.com/MomoHub007/ZeroX-Best-Script/refs/heads/main/Games/Hunting.lua",
     [10740316645] = "https://raw.githubusercontent.com/MomoHub007/ZeroX-Best-Script/refs/heads/main/Games/Anime%20Mine",
     [3183403065] = "https://raw.githubusercontent.com/MomoHub007/ZeroX-Best-Script/refs/heads/main/Games/Anime%20Adventure",
+    [10770228857] = "https://raw.githubusercontent.com/MomoHub007/ZeroX-Best-Script/refs/heads/main/Games/Steal%20a%20power",
 }
 
 local gameId = game.GameId
