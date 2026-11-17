@@ -874,33 +874,115 @@ local function loadModule(path)
     return require(module)
 end
 
--- Resilient Controller Loader (Retries up to 30 times without halting)
-local controllers = nil
+-- Resilient Controller & Data Loader (Independent retry for maximum fault tolerance)
+local data = nil
 for attempt = 1, 30 do
     local ok, res = pcall(function()
-        return {
-            data = loadModule({ "Framework", "Features", "Data", "DataController" }),
-            roll = loadModule({ "Framework", "Features", "Rolling", "RollController" }),
-            upgrades = loadModule({ "Framework", "Features", "Upgrades", "UpgradeController" }),
-        }
+        return loadModule({ "Framework", "Features", "Data", "DataController" })
     end)
-    if ok and res and res.data then
-        controllers = res
+    if ok and res then
+        data = res
         break
     end
     setStatus(string.format("Waiting for game controllers (%d/30)...", attempt))
     task.wait(1.0)
 end
 
-if not controllers then
+if not data then
     setStatus("ERROR: Game controllers failed to load after 30s.")
-    warn("[Anime Dice Kaitun] Controllers failed to load.")
+    warn("[Anime Dice Kaitun] DataController failed to load.")
     return
 end
 
-local data = controllers.data
-local roll = controllers.roll
-local upgradeController = controllers.upgrades
+local okRoll, resRoll = pcall(function()
+    return loadModule({ "Framework", "Features", "Rolling", "RollController" })
+end)
+local roll = (okRoll and resRoll) or {
+    SetAutoRoll = function(state)
+        pcall(function()
+            local folder = ReplicatedStorage:FindFirstChild("Network") and ReplicatedStorage.Network:FindFirstChild("RollService")
+            local re = folder and (folder:FindFirstChild("SetAutoRoll", true) or (folder:FindFirstChild("RE") and folder.RE:FindFirstChild("SetAutoRoll")))
+            if re and re:IsA("RemoteEvent") then
+                re:FireServer(state)
+            end
+        end)
+    end
+}
+
+local okUpgrades, resUpgrades = pcall(function()
+    return loadModule({ "Framework", "Features", "Upgrades", "UpgradeController" })
+end)
+local upgradeController = (okUpgrades and resUpgrades) or nil
+
+local function getOwnPlot()
+    local ok, res = pcall(function()
+        local controller = loadModule({ "Framework", "Features", "Plot", "PlotController" })
+        return controller and controller.plot
+    end)
+    if ok and res and res.Parent then
+        return res
+    end
+    local plots = workspace:FindFirstChild("Plots")
+    local claimed = plots and plots:FindFirstChild("Claimed")
+    if claimed then
+        for _, plot in ipairs(claimed:GetChildren()) do
+            local label = plot:FindFirstChild("PlayerName", true)
+            if label and (label.Text == player.Name or label.Text == player.DisplayName) then
+                return plot
+            end
+        end
+    end
+    return nil
+end
+
+local function getHeldUnit()
+    local ok, res = pcall(function()
+        local controller = loadModule({ "Framework", "Features", "Inventory", "Kinds", "Unit", "UnitController" })
+        return controller and controller.EquippedUnit and controller.EquippedUnit()
+    end)
+    if ok and res ~= nil then return res end
+    return data.EquippedUnit and data.EquippedUnit()
+end
+
+local function unequipHeldUnit(services)
+    local ok = pcall(function()
+        local controller = loadModule({ "Framework", "Features", "Inventory", "Kinds", "Unit", "UnitController" })
+        if controller and controller.Unequip then controller.Unequip() return true end
+    end)
+    if ok then return end
+    pcall(function()
+        local netRoot = services and services.networkRoot or ReplicatedStorage:FindFirstChild("Network")
+        local comm = services and services.network and services.network.ClientComm.new(netRoot, false, "UnitService")
+        local fn = comm and comm:GetFunction("Unequip")
+        if fn then fn() else
+            local folder = netRoot and netRoot:FindFirstChild("UnitService")
+            local rf = folder and (folder:FindFirstChild("Unequip", true) or (folder:FindFirstChild("RF") and folder.RF:FindFirstChild("Unequip")))
+            if rf and rf:IsA("RemoteFunction") then rf:InvokeServer() end
+        end
+    end)
+end
+
+local function startTowerBattle(services, towerName)
+    if services.towerController and services.towerController.startTower then
+        local sOk, res = pcall(services.towerController.startTower, towerName)
+        if sOk then return res end
+    end
+    if services.towersComm then
+        local okFn, fn = pcall(function() return services.towersComm:GetFunction("PlayTower") end)
+        if okFn and fn then
+            local sOk, res = pcall(fn, towerName)
+            if sOk then return res end
+        end
+    end
+    local netRoot = services and services.networkRoot or ReplicatedStorage:FindFirstChild("Network")
+    local folder = netRoot and netRoot:FindFirstChild("Towers")
+    local rf = folder and (folder:FindFirstChild("PlayTower", true) or (folder:FindFirstChild("RF") and folder.RF:FindFirstChild("PlayTower")))
+    if rf and rf:IsA("RemoteFunction") then
+        local sOk, res = pcall(function() return rf:InvokeServer(towerName) end)
+        if sOk then return res end
+    end
+    return false
+end
 
 --------------------------------------------------------------------------------
 -- Shared Progression & Network Services Cache
@@ -1142,14 +1224,44 @@ local function runAutoUpgrade(generation)
     end
     while active() do
         local ok, err = pcall(function()
-            local tree = upgradeController.Tree
+            local tree = upgradeController and upgradeController.Tree
             local options = tree and tree.options
+            if not options or not options.structure or not options.data or not options.config then
+                local treeStructure = pcall(function() return loadModule({ "Framework", "Features", "Upgrades", "TreeStructure" }) end)
+                    and loadModule({ "Framework", "Features", "Upgrades", "TreeStructure" }) or nil
+                local upgradesConfig = pcall(function() return loadModule({ "Framework", "Features", "Upgrades", "Upgrades" }) end)
+                    and loadModule({ "Framework", "Features", "Upgrades", "Upgrades" }) or nil
+                if treeStructure and upgradesConfig then
+                    options = {
+                        structure = treeStructure.Main or treeStructure,
+                        config = upgradesConfig,
+                        data = data.Upgrades and data.Upgrades(),
+                        getCurrency = data.Money,
+                        buy = function(name)
+                            pcall(function()
+                                local net = ReplicatedStorage:FindFirstChild("Network")
+                                local buyRemote = net and net:FindFirstChild("RE") and net.RE:FindFirstChild("BuyUpgrade")
+                                if buyRemote and buyRemote:IsA("RemoteEvent") then
+                                    buyRemote:FireServer(name)
+                                end
+                            end)
+                        end
+                    }
+                end
+            end
             if not options or not options.structure or not options.data or not options.config then
                 error("upgrade tree unavailable")
             end
+            local function isUnlocked(name)
+                local val = options.data and options.data[name]
+                if type(val) == "function" then
+                    local sOk, res = pcall(val)
+                    return sOk and res == true
+                end
+                return val == true
+            end
             if pendingTreeUpgrade then
-                local state = options.data[pendingTreeUpgrade.name]
-                if state and state() == true then
+                if isUnlocked(pendingTreeUpgrade.name) then
                     pendingTreeUpgrade = nil
                 else
                     if os.clock() >= pendingTreeUpgrade.deadline then
@@ -1168,10 +1280,9 @@ local function runAutoUpgrade(generation)
                 if not seen[parent] then
                     seen[parent] = true
                     for _, child in ipairs(structure:GetChildren(parent)) do
-                        local state = options.data[child]
-                        if state and state() == true then
+                        if isUnlocked(child) then
                             queue[#queue + 1] = child
-                        elseif state then
+                        else
                             local node = options.config[child]
                             local price = node and node.price
                             if type(price) == "number" and price >= 0 and price <= money
@@ -1450,9 +1561,10 @@ local function updateBestPlotUnit(generation)
         return session.alive and session.autoUnits and session.unitsGeneration == generation
     end
     local services = getServices()
-    local config = loadModule({ "Framework", "Features", "Plot", "PlotConfig" })
-    local plot = loadModule({ "Framework", "Features", "Plot", "PlotController" }).plot
-    local controller = loadModule({ "Framework", "Features", "Inventory", "Kinds", "Unit", "UnitController" })
+    local config = pcall(function() return loadModule({ "Framework", "Features", "Plot", "PlotConfig" }) end)
+        and loadModule({ "Framework", "Features", "Plot", "PlotConfig" }) or nil
+    if not config then return end
+    local plot = getOwnPlot()
     local comm = services.network.ClientComm.new(services.networkRoot, false, "PlotService")
     local collect, interact = comm:GetSignal("CollectBalance"), comm:GetSignal("InteractSlot")
 
@@ -1464,10 +1576,10 @@ local function updateBestPlotUnit(generation)
     end
     if not ready() then return end
 
-    local held = controller.EquippedUnit()
+    local held = getHeldUnit()
     if plotUnits.reserved then
         if held == plotUnits.reserved then
-            controller.Unequip()
+            unequipHeldUnit(services)
             return
         end
         plotUnits.reserved = nil
@@ -1988,7 +2100,7 @@ local function runAutoTower(generation)
             dismissTowerPopups()
             if not towerActive(generation) then return end
             towerStartInFlight = true
-            local sOk, started = pcall(services.towerController.startTower, target.name)
+            local sOk, started = pcall(startTowerBattle, services, target.name)
             towerStartInFlight = false
             if not sOk then error(started) end
 
@@ -2461,12 +2573,9 @@ local potionFuseInFlight = false
 local potionFuseTripCharacter
 
 local function getOwnPlotSpawn()
-    local controller = loadModule({ "Framework", "Features", "Plot", "PlotController" })
-    local plot = controller and controller.plot
-    local plots = workspace:FindFirstChild("Plots")
-    local claimed = plots and plots:FindFirstChild("Claimed")
+    local plot = getOwnPlot()
     local spawn = plot and plot:FindFirstChild("Spawn")
-    if not plot or plot.Parent ~= claimed or not spawn or not spawn:IsA("BasePart") then
+    if not plot or not spawn or not spawn:IsA("BasePart") then
         return nil
     end
     return spawn.CFrame * CFrame.new(0, 5, 0)
@@ -2692,7 +2801,6 @@ local function runCleanup(generation)
         local ok, err = pcall(function()
             if cleanupInFlight then return end
             local services = getServices()
-            local controller = loadModule({ "Framework", "Features", "Inventory", "Kinds", "Unit", "UnitController" })
             local sell = services.network.ClientComm.new(services.networkRoot, false, "SellService"):GetFunction("SellInventory")
             if not active() then return end
             local inventory, slots, team = data.Inventory(), data.Slots(), data.TowerTeam()
@@ -2701,7 +2809,7 @@ local function runCleanup(generation)
             end
 
             local protected = {}
-            local held = controller.EquippedUnit()
+            local held = getHeldUnit()
             if held then protected[held] = true end
             if plotUnits.reserved then protected[plotUnits.reserved] = true end
             local lowestPlottedOdds
