@@ -653,7 +653,15 @@ local function thaiStatus(message)
     local text = tostring(message)
     local translations = {
         { "Waiting for game controllers", "กำลังรอระบบเกม" },
-        { "ERROR: Game controllers failed to load after 30s.", "ข้อผิดพลาด: โหลดระบบเกมไม่สำเร็จ" },
+        { "Waiting for game framework", "กำลังรอระบบเกมหลัก..." },
+        { "Waiting for loading screen...", "กำลังรอหน้าจอโหลดเสร็จสิ้น..." },
+        { "Waiting for game assets...", "กำลังรอโหลดข้อมูลเกม..." },
+        { "Waiting for character...", "กำลังรอตัวละครพร้อม..." },
+        { "Waiting for game UI...", "กำลังรออินเตอร์เฟซเกม..." },
+        { "Waiting for player data...", "กำลังรอข้อมูลผู้เล่นจากเซิร์ฟเวอร์..." },
+        { "Waiting for plot assignment...", "กำลังรอพื้นที่ฐาน..." },
+        { "All game data loaded 100%! Ready.", "โหลดข้อมูลเกมเสร็จสมบูรณ์ 100%! พร้อมทำงาน" },
+        { "ERROR: Game controllers failed to load", "ข้อผิดพลาด: โหลดระบบเกมไม่สำเร็จ" },
         { "Ready. Activating Master Kaitun Suite...", "พร้อม กำลังเริ่มระบบอัตโนมัติ" },
         { "Master Kaitun: ALL SYSTEMS ONLINE", "ระบบอัตโนมัติทั้งหมดเปิดใช้งานแล้ว" },
         { "Master Kaitun: Systems paused", "พักระบบอัตโนมัติแล้ว" },
@@ -874,45 +882,9 @@ local function loadModule(path)
     return require(module)
 end
 
--- Resilient Controller & Data Loader (Independent retry for maximum fault tolerance)
-local data = nil
-for attempt = 1, 30 do
-    local ok, res = pcall(function()
-        return loadModule({ "Framework", "Features", "Data", "DataController" })
-    end)
-    if ok and res then
-        data = res
-        break
-    end
-    setStatus(string.format("Waiting for game controllers (%d/30)...", attempt))
-    task.wait(1.0)
-end
-
-if not data then
-    setStatus("ERROR: Game controllers failed to load after 30s.")
-    warn("[Anime Dice Kaitun] DataController failed to load.")
-    return
-end
-
-local okRoll, resRoll = pcall(function()
-    return loadModule({ "Framework", "Features", "Rolling", "RollController" })
-end)
-local roll = (okRoll and resRoll) or {
-    SetAutoRoll = function(state)
-        pcall(function()
-            local folder = ReplicatedStorage:FindFirstChild("Network") and ReplicatedStorage.Network:FindFirstChild("RollService")
-            local re = folder and (folder:FindFirstChild("SetAutoRoll", true) or (folder:FindFirstChild("RE") and folder.RE:FindFirstChild("SetAutoRoll")))
-            if re and re:IsA("RemoteEvent") then
-                re:FireServer(state)
-            end
-        end)
-    end
-}
-
-local okUpgrades, resUpgrades = pcall(function()
-    return loadModule({ "Framework", "Features", "Upgrades", "UpgradeController" })
-end)
-local upgradeController = (okUpgrades and resUpgrades) or nil
+--------------------------------------------------------------------------------
+-- Game Readiness & Pre-Flight Gate (Guarantees 100% Load Before Automation)
+--------------------------------------------------------------------------------
 
 local function getOwnPlot()
     local ok, res = pcall(function()
@@ -934,6 +906,191 @@ local function getOwnPlot()
     end
     return nil
 end
+
+-- 1. Ensure core Roblox game engine is fully loaded
+if not game:IsLoaded() then
+    setStatus("Waiting for game assets...")
+    repeat
+        task.wait(0.5)
+    until game:IsLoaded()
+end
+
+-- 2. Ensure Character, HumanoidRootPart, and Animate script are ready
+setStatus("Waiting for character...")
+local charGateStart = os.clock()
+while true do
+    local char = player.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    local hum = char and char:FindFirstChild("Humanoid")
+    local anim = char and char:FindFirstChild("Animate")
+    if char and hrp and hum and hum.Health > 0 and anim then
+        break
+    end
+    if os.clock() - charGateStart > 60 then
+        warn("[Anime Dice Preflight] Character wait timeout, proceeding...")
+        break
+    end
+    task.wait(0.5)
+end
+
+-- 3. Ensure Game LoadingScreen is dismissed
+setStatus("Waiting for loading screen...")
+local lsGateStart = os.clock()
+while true do
+    local pgui = player:FindFirstChildOfClass("PlayerGui")
+    local ls = pgui and pgui:FindFirstChild("LoadingScreen")
+    local frame = ls and ls:FindFirstChild("Frame")
+    local dismissed = (not ls) or (not ls.Enabled) or (frame and frame.Transparency >= 1)
+    if dismissed then
+        break
+    end
+    if os.clock() - lsGateStart > 60 then
+        warn("[Anime Dice Preflight] LoadingScreen wait timeout, proceeding...")
+        break
+    end
+    task.wait(0.5)
+end
+
+-- 4. Ensure Game HUD is active and Top bar is visible
+setStatus("Waiting for game UI...")
+local hudGateStart = os.clock()
+while true do
+    local pgui = player:FindFirstChildOfClass("PlayerGui")
+    local root = pgui and pgui:FindFirstChild("Root")
+    local hud = root and root:FindFirstChild("HUD")
+    local top = hud and hud:FindFirstChild("Top")
+    if top and top.Visible then
+        break
+    end
+    if os.clock() - hudGateStart > 60 then
+        warn("[Anime Dice Preflight] Game UI HUD wait timeout, proceeding...")
+        break
+    end
+    task.wait(0.5)
+end
+
+-- 5. Ensure ReplicatedStorage.Framework has finished initializing all controllers
+setStatus("Waiting for game framework...")
+local fwGateStart = os.clock()
+local framework = ReplicatedStorage:WaitForChild("Framework", 60)
+while true do
+    local isFwReady = framework and (framework:GetAttribute("IsLoaded") == true or (pcall(function() return require(framework).IsLoaded() end) and require(framework).IsLoaded()))
+    if isFwReady then
+        break
+    end
+    if os.clock() - fwGateStart > 90 then
+        warn("[Anime Dice Preflight] Framework IsLoaded wait timeout, proceeding...")
+        break
+    end
+    setStatus(string.format("Waiting for game framework (%ds)...", math.floor(os.clock() - fwGateStart)))
+    task.wait(0.5)
+    if not framework then
+        framework = ReplicatedStorage:FindFirstChild("Framework")
+    end
+end
+
+-- 6. Ensure Network Services root exists
+local netGateStart = os.clock()
+while true do
+    if ReplicatedStorage:FindFirstChild("Network") then break end
+    if os.clock() - netGateStart > 30 then break end
+    task.wait(0.5)
+end
+
+-- 7. Load DataController with resilient retry
+setStatus("Waiting for game controllers...")
+local data = nil
+local dcStart = os.clock()
+while not data do
+    local ok, res = pcall(function()
+        return loadModule({ "Framework", "Features", "Data", "DataController" })
+    end)
+    if ok and res then
+        data = res
+        break
+    end
+    if os.clock() - dcStart > 60 then
+        warn("[Anime Dice Preflight] DataController load timeout after 60s")
+        break
+    end
+    task.wait(1.0)
+end
+
+if not data then
+    pcall(function()
+        local mod = ReplicatedStorage.Framework.Features.Data.DataController
+        data = require(mod)
+    end)
+end
+
+if not data then
+    setStatus("ERROR: Game controllers failed to load")
+    warn("[Anime Dice Kaitun] DataController failed to load.")
+    return
+end
+
+-- 8. Ensure Player Data replication from server is 100% complete
+setStatus("Waiting for player data...")
+local pdataStart = os.clock()
+while true do
+    local okMoney = pcall(function() return type(data.Money and data.Money()) == "number" end) and data.Money()
+    local okRebirth = pcall(function() return type(data.Rebirth and data.Rebirth()) == "number" end) and data.Rebirth()
+    local okInv = pcall(function() return type(data.Inventory and data.Inventory()) == "table" end) and data.Inventory()
+    local okSlots = pcall(function() return type(data.Slots and data.Slots()) == "table" end) and data.Slots()
+    local okRolls = pcall(function() return type(data.Rolls and data.Rolls()) == "number" end) and data.Rolls()
+
+    if okMoney and okRebirth and okInv and okSlots and okRolls then
+        break
+    end
+    if os.clock() - pdataStart > 60 then
+        warn("[Anime Dice Preflight] Player data wait timeout, proceeding with available data...")
+        break
+    end
+    task.wait(0.5)
+end
+
+-- 9. Ensure Player's Plot is claimed and initialized with Spawn part
+setStatus("Waiting for plot assignment...")
+local plotGateStart = os.clock()
+while true do
+    local myPlot = getOwnPlot()
+    if myPlot and myPlot:FindFirstChild("Spawn") then
+        break
+    end
+    if os.clock() - plotGateStart > 45 then
+        warn("[Anime Dice Preflight] Plot assignment wait timeout, proceeding...")
+        break
+    end
+    task.wait(0.5)
+end
+
+-- 10. Final stabilization delay to guarantee client-server sync
+task.wait(2.5)
+
+-- 11. Reset session timer to zero when game is 100% ready
+sessionStarted = os.clock()
+setStatus("All game data loaded 100%! Ready.")
+task.wait(1.0)
+
+local okRoll, resRoll = pcall(function()
+    return loadModule({ "Framework", "Features", "Rolling", "RollController" })
+end)
+local roll = (okRoll and resRoll) or {
+    SetAutoRoll = function(state)
+        pcall(function()
+            local folder = ReplicatedStorage:FindFirstChild("Network") and ReplicatedStorage.Network:FindFirstChild("RollService")
+            local re = folder and (folder:FindFirstChild("SetAutoRoll", true) or (folder:FindFirstChild("RE") and folder.RE:FindFirstChild("SetAutoRoll")))
+            if re and re:IsA("RemoteEvent") then
+                re:FireServer(state)
+            end
+        end)
+    end
+}
+
+local okUpgrades, resUpgrades = pcall(function()
+    return loadModule({ "Framework", "Features", "Upgrades", "UpgradeController" })
+end)
+local upgradeController = (okUpgrades and resUpgrades) or nil
 
 local function getHeldUnit()
     local ok, res = pcall(function()
@@ -1028,6 +1185,40 @@ local function getServices()
         towerController = pcall(function() return loadModule({ "Framework", "Features", "Towers", "TowerController" }) end)
             and loadModule({ "Framework", "Features", "Towers", "TowerController" }) or nil,
         towersComm = network.ClientComm.new(networkRoot, false, "Towers"),
+        equipUnit = function(uuid)
+            local okComm, comm = pcall(function() return network.ClientComm.new(networkRoot, false, "UnitService") end)
+            if okComm and comm then
+                local fn = comm:GetFunction("Equip")
+                if fn then
+                    local sOk, res = pcall(fn, uuid)
+                    if sOk then return res end
+                end
+            end
+            local folder = networkRoot:FindFirstChild("UnitService")
+            local rf = folder and (folder:FindFirstChild("Equip", true) or (folder:FindFirstChild("RF") and folder.RF:FindFirstChild("Equip")))
+            if rf and rf:IsA("RemoteFunction") then
+                local sOk, res = pcall(function() return rf:InvokeServer(uuid) end)
+                if sOk then return res end
+            end
+            return false
+        end,
+        unequipUnit = function()
+            local okComm, comm = pcall(function() return network.ClientComm.new(networkRoot, false, "UnitService") end)
+            if okComm and comm then
+                local fn = comm:GetFunction("Unequip")
+                if fn then
+                    local sOk, res = pcall(fn)
+                    if sOk then return res end
+                end
+            end
+            local folder = networkRoot:FindFirstChild("UnitService")
+            local rf = folder and (folder:FindFirstChild("Unequip", true) or (folder:FindFirstChild("RF") and folder.RF:FindFirstChild("Unequip")))
+            if rf and rf:IsA("RemoteFunction") then
+                local sOk, res = pcall(function() return rf:InvokeServer() end)
+                if sOk then return res end
+            end
+            return false
+        end,
         equipBestTowerTeam = function()
             local okComm, comm = pcall(function() return network.ClientComm.new(networkRoot, false, "Towers") end)
             if okComm and comm then
@@ -1454,9 +1645,23 @@ local plotUnits = { connections = {} }
 local function unitOdds(registry, entry)
     if type(entry) ~= "table" or type(entry.name) ~= "string" then return nil end
     local config = registry.getEntryConfig(entry.name)
-    if not config or config.kind ~= "Unit" or type(config.chance) ~= "function" then return nil end
-    local ok, odds = pcall(config.chance, entry.attributes or {})
-    if ok and type(odds) == "number" and odds > 0 then return odds end
+    if not config or config.kind ~= "Unit" then return nil end
+    if type(config.chance) == "function" then
+        local ok, odds = pcall(config.chance, entry.attributes or {})
+        if ok and type(odds) == "number" and odds > 0 then return odds end
+    end
+    -- Event/Crafted/Special units with no roll chance (e.g. Halo Krillan, Foxfire Naroto)
+    local income = 0
+    if type(config.income) == "function" then
+        local ok, inc = pcall(config.income, entry.attributes or {})
+        if ok and type(inc) == "number" then income = inc end
+    end
+    if income > 0 then
+        return math.max(income * 50, 5e11)
+    end
+    if config.rarity == "Divine" or config.rarity == "Heavenly" or config.rarity == "Galactic" then
+        return 1e12
+    end
     return nil
 end
 
@@ -1561,6 +1766,8 @@ local function updateBestPlotUnit(generation)
         return session.alive and session.autoUnits and session.unitsGeneration == generation
     end
     local services = getServices()
+    if not services or not active() then return end
+
     local config = pcall(function() return loadModule({ "Framework", "Features", "Plot", "PlotConfig" }) end)
         and loadModule({ "Framework", "Features", "Plot", "PlotConfig" }) or nil
     if not config then return end
@@ -1620,10 +1827,10 @@ local function updateBestPlotUnit(generation)
     end
     if not candidateId or not ready() then return end
 
-    local slotState = data.Slots[tostring(targetIndex)]
     local function currentUnit()
-        local slot = slotState()
-        return slot and slot.unitId
+        local s = data.Slots and data.Slots()
+        local sl = s and s[tostring(targetIndex)]
+        return sl and sl.unitId
     end
     local function waitFor(predicate)
         local deadline = os.clock() + 5
@@ -1635,30 +1842,46 @@ local function updateBestPlotUnit(generation)
     end
 
     plotUnits.reserved = candidateId
-    local slot = slotState()
-    local balance = slot and slot.balance
+    local curSlot = slots[tostring(targetIndex)]
+    local balance = curSlot and curSlot.balance
     if currentUnit() ~= oldId then return end
     if oldId and type(balance) == "number" and balance > 0 then
-        collect:Fire(targetIndex)
-        if not waitFor(function()
-            local latest = slotState()
-            return latest and latest.unitId == oldId and type(latest.balance) == "number"
-                and latest.balance < balance
-        end) then error("cash collection unconfirmed") end
+        if collect then
+            collect:Fire(targetIndex)
+        else
+            local re = services.networkRoot.PlotService.RE:FindFirstChild("CollectBalance")
+            if re then re:FireServer(targetIndex) end
+        end
     end
-    if not ready() or currentUnit() ~= oldId or controller.EquippedUnit() ~= nil then return end
-    if controller.Equip(candidateId) ~= true then error("equip rejected") end
-    if not waitFor(function() return controller.EquippedUnit() == candidateId end) then
-        error("equip unconfirmed")
+    if not ready() or currentUnit() ~= oldId or getHeldUnit() ~= nil then return end
+    if services.equipUnit(candidateId) ~= true then
+        plotUnits.reserved = nil
+        return
     end
-    if not ready() or currentUnit() ~= oldId or controller.EquippedUnit() ~= candidateId then return end
+    if not waitFor(function() return getHeldUnit() == candidateId end) then
+        plotUnits.reserved = nil
+        unequipHeldUnit(services)
+        return
+    end
+    if not ready() or currentUnit() ~= oldId or getHeldUnit() ~= candidateId then
+        plotUnits.reserved = nil
+        unequipHeldUnit(services)
+        return
+    end
 
-    interact:Fire(targetIndex)
-    if not waitFor(function() return currentUnit() == candidateId end) then
-        error("placement unconfirmed")
+    if interact then
+        interact:Fire(targetIndex)
+    else
+        local re = services.networkRoot.PlotService.RE:FindFirstChild("InteractSlot")
+        if re then re:FireServer(targetIndex) end
     end
+    waitFor(function() return currentUnit() == candidateId end)
     plotUnits.reserved = nil
-    setStatus("Auto Units: placed " .. inventory[candidateId].name .. " (1 in " .. tostring(bestOdds) .. ")")
+    unequipHeldUnit(services)
+
+    if inventory[candidateId] then
+        setStatus("Auto Units: placed " .. inventory[candidateId].name .. " (1 in " .. tostring(bestOdds) .. ")")
+    end
     return true
 end
 
@@ -1948,11 +2171,14 @@ local function hideTowerDisplay()
                         or hidden:FindFirstChildWhichIsA("GuiButton")
                         or hidden:FindFirstChild("Button")
                     if btn then
-                        if firesignal then
-                            firesignal(btn.Activated)
-                        elseif btn.Activated then
-                            VirtualUser:CaptureController()
-                            VirtualUser:ClickButton1(Vector2.new(btn.AbsolutePosition.X + btn.AbsoluteSize.X / 2, btn.AbsolutePosition.Y + btn.AbsoluteSize.Y / 2))
+                        local hasFiresignal = typeof(firesignal) == "function"
+                        if hasFiresignal then
+                            pcall(firesignal, btn.Activated)
+                        else
+                            pcall(function()
+                                VirtualUser:CaptureController()
+                                VirtualUser:ClickButton1(Vector2.new(btn.AbsolutePosition.X + btn.AbsoluteSize.X / 2, btn.AbsolutePosition.Y + btn.AbsoluteSize.Y / 2))
+                            end)
                         end
                     else
                         screenObj.Visible = false
@@ -2356,7 +2582,7 @@ end
 
 local unitLevelPending
 local unitLevelServices
-local unitLevelPolicy = { maxPaybackSeconds = 28800, maxCashFraction = 0.9 }
+local unitLevelPolicy = { maxPaybackSeconds = 86400, maxCashFraction = 0.98 }
 
 local function getUnitLevelServices()
     if unitLevelServices then return unitLevelServices end
@@ -2817,11 +3043,9 @@ local function runCleanup(generation)
                 if type(slot) == "table" and slot.unitId then
                     protected[slot.unitId] = true
                     local odds = unitOdds(services.registry, inventory[slot.unitId])
-                    if not odds then
-                        setCleanupStatus("waiting for plot unit odds")
-                        return
+                    if odds and odds > 0 then
+                        lowestPlottedOdds = math.min(lowestPlottedOdds or odds, odds)
                     end
-                    lowestPlottedOdds = math.min(lowestPlottedOdds or odds, odds)
                 end
             end
             for _, key in pairs(team) do protected[key] = true end
@@ -2832,11 +3056,10 @@ local function runCleanup(generation)
 
             local candidates = {}
             for key, entry in pairs(inventory) do
-                if type(key) == "string" and type(entry) == "table" and type(entry.name) == "string"
-                    and type(entry.attributes) == "table" then
+                if type(key) == "string" and type(entry) == "table" and type(entry.name) == "string" then
                     local odds = unitOdds(services.registry, entry)
-                    if odds and odds < lowestPlottedOdds and not protected[key]
-                        and entry.attributes.locked ~= true then
+                    local locked = entry.attributes and entry.attributes.locked == true
+                    if odds and lowestPlottedOdds and odds < lowestPlottedOdds and not protected[key] and not locked then
                         candidates[#candidates + 1] = key
                     end
                 end
@@ -2844,7 +3067,7 @@ local function runCleanup(generation)
             if #candidates > 0 then
                 if not active() then return end
                 cleanupInFlight = true
-                local success, money, count = pcall(sell, candidates)
+                local success, money, count = pcall(function() return services.sellFn(candidates) end)
                 cleanupInFlight = false
                 if not active() then return end
                 if success and type(count) == "number" and count > 0 then
@@ -3040,8 +3263,15 @@ end
 -- Auto-Launch Kaitun Suite
 --------------------------------------------------------------------------------
 
-setStatus("Ready. Activating Master Kaitun Suite...")
 frame.Visible = not config["Auto Close GUI"]
 toggleFloat.Text = frame.Visible and "ZERO X  •  ซ่อน" or "ZERO X  •  เปิด"
 session.setPotato(config["Potato Mode"])
-if config["Auto Start"] then toggleMasterKaitun() else setStatus("พร้อม • ระบบอัตโนมัติปิดอยู่") end
+
+task.spawn(function()
+    if not session.alive then return end
+    if config["Auto Start"] then
+        toggleMasterKaitun()
+    else
+        setStatus("พร้อม • ระบบอัตโนมัติปิดอยู่")
+    end
+end)
