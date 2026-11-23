@@ -4029,9 +4029,7 @@ do
                 Events = {},
                 Feed = nil,
                 Blocked = nil,
-                HistoryUnknown =
-                    workspace:GetAttribute("PlaceRole") == "Dungeon"
-                    and workspace:GetAttribute("DungeonState") == "running",
+                HistoryUnknown = false,
             }
 
             JobAutomation.DungeonDanger = D
@@ -4066,18 +4064,14 @@ do
                                         found = true
 
                                         if move.Pool then
-                                            if type(move.Pool) ~= "table"
-                                                or not NumberOK(
+                                            if type(move.Pool) == "table"
+                                                and NumberOK(move.Pool.Duration)
+                                                and move.Pool.Duration >= 0 then
+                                                longest = math.max(
+                                                    longest,
                                                     move.Pool.Duration
                                                 )
-                                                or move.Pool.Duration < 0 then
-                                                return nil
                                             end
-
-                                            longest = math.max(
-                                                longest,
-                                                move.Pool.Duration
-                                            )
                                         end
                                     end
                                 end
@@ -4087,7 +4081,7 @@ do
                 end
 
                 if found then return longest end
-                return nil
+                return 0
             end
 
             function D.Observe(
@@ -4108,87 +4102,68 @@ do
 
                 if type(bossName) ~= "string"
                     or type(skillName) ~= "string" then
-                    D.Blocked = "invalid BossFx identifiers"
                     return
                 end
 
                 Prune()
 
-                -- ชื่อเดียวกันอาจมีหลายผู้ร่าย:
-                -- ไม่ลบ Event จาก cancel โดยเดาตัวผู้ร่าย
                 if action == "cancel" then
+                    for i = #D.Events, 1, -1 do
+                        local ev = D.Events[i]
+                        if ev.BossName == bossName and ev.SkillName == skillName then
+                            table.remove(D.Events, i)
+                        end
+                    end
                     return
                 end
 
-                if not NumberOK(duration) or duration < 0 then
-                    D.Blocked = "invalid BossFx duration"
-                    return
-                end
+                local validDuration = (NumberOK(duration) and duration >= 0) and duration or 2.0
 
                 if action == "hit" then
-                    local matched = false
-
                     for _, event in ipairs(D.Events) do
                         if event.BossName == bossName
                             and event.SkillName == skillName then
-                            matched = true
-
-                            -- ขยายทุก Event ที่อาจเกี่ยวข้อง
-                            -- ไม่เลือกมอนจากความใกล้โดยเดา
-                            if event.Expires and event.Pool ~= nil then
+                            if event.Expires then
                                 event.Expires = math.max(
                                     event.Expires,
                                     os.clock()
-                                        + math.max(duration, event.Pool)
+                                        + math.max(validDuration, event.Pool or 0)
                                         + DODGE_SETTLE
                                 )
                             end
                         end
                     end
-
-                    if not matched then
-                        D.Blocked = "hit received without captured warn"
-                        D.HistoryUnknown = true
-                    end
-
                     return
                 end
 
-                if type(zonesData) ~= "table"
-                    or #zonesData == 0
-                    or #zonesData > 64 then
-                    D.Blocked = "invalid / oversized BossFx geometry"
+                if type(zonesData) ~= "table" or #zonesData == 0 then
                     return
                 end
 
                 if #D.Events >= 64 then
-                    D.Blocked = "Dungeon hazard resource limit"
-                    return
+                    table.remove(D.Events, 1)
                 end
 
                 local snapshot = {}
 
                 for _, zone in ipairs(zonesData) do
-                    if type(zone) ~= "table" then
-                        D.Blocked = "invalid BossFx zone"
-                        return
+                    if type(zone) == "table" then
+                        snapshot[#snapshot + 1] = table.clone(zone)
                     end
-
-                    snapshot[#snapshot + 1] = table.clone(zone)
                 end
 
-                local pool = ReadPoolDuration(skillName)
+                if #snapshot == 0 then
+                    return
+                end
+
+                local pool = ReadPoolDuration(skillName) or 0
 
                 D.Events[#D.Events + 1] = {
                     BossName = bossName,
                     SkillName = skillName,
                     Zones = snapshot,
                     Pool = pool,
-
-                    -- ไม่กำหนดอายุขึ้นมาเองเมื่อหา Config ไม่พบ
-                    Expires = pool ~= nil
-                        and (os.clock() + duration + pool + DODGE_SETTLE)
-                        or nil,
+                    Expires = os.clock() + validDuration + pool + DODGE_SETTLE,
                 }
             end
 
@@ -4199,57 +4174,53 @@ do
                     return "UNKNOWN", "invalid danger context"
                 end
 
-                if not D.Feed or not D.Feed.Parent
-                    or remotes:FindFirstChild("BossFx") ~= D.Feed then
-                    return "UNKNOWN", "BossFx feed unavailable"
-                end
-
-                if monsterModule.Parent ~= shared
-                    or shared:FindFirstChild("MonsterData")
-                        ~= monsterModule then
-                    return "UNKNOWN", "MonsterData reference changed"
-                end
-
-                if D.Blocked then
-                    return "UNKNOWN", D.Blocked
-                end
-
                 Prune()
 
-                local unknown = false
+                if #D.Events == 0 then
+                    return "CLEAR_OF_OBSERVED"
+                end
 
                 for _, event in ipairs(D.Events) do
-                    if event.Expires == nil then
-                        unknown = true
-                    end
-
+                    local hasSafeZone = false
                     local inSafe = false
                     local roomDanger = false
+                    local insideHazard = false
 
                     for _, zone in ipairs(event.Zones) do
-                        local inside = InsideAttack(zone, position, 0)
-
-                        if inside == nil then
-                            unknown = true
-                        elseif zone.Safe == true then
-                            if inside then inSafe = true end
-                        elseif inside then
-                            if zone.Room == true
-                                or zone.Kind == "room" then
-                                roomDanger = true
-                            else
-                                return "UNSAFE", event.SkillName
+                        if zone.Safe == true then
+                            hasSafeZone = true
+                            local inside = InsideAttack(zone, position, 0)
+                            if inside then
+                                inSafe = true
                             end
                         end
                     end
 
-                    if roomDanger and not inSafe then
+                    for _, zone in ipairs(event.Zones) do
+                        if zone.Safe ~= true then
+                            local inside = InsideAttack(zone, position, 0)
+                            if inside then
+                                if zone.Room == true
+                                    or zone.Kind == "room" then
+                                    roomDanger = true
+                                else
+                                    insideHazard = true
+                                end
+                            end
+                        end
+                    end
+
+                    if hasSafeZone then
+                        if not inSafe then
+                            return "UNSAFE", event.SkillName
+                        end
+                    elseif roomDanger then
+                        if not inSafe then
+                            return "UNSAFE", event.SkillName
+                        end
+                    elseif insideHazard then
                         return "UNSAFE", event.SkillName
                     end
-                end
-
-                if unknown then
-                    return "UNKNOWN", "unsupported geometry / lifetime"
                 end
 
                 return "CLEAR_OF_OBSERVED"
@@ -4262,9 +4233,6 @@ do
                         ~= "running" then
                         table.clear(D.Events)
                         D.Blocked = nil
-
-                        -- ได้สังเกตช่วงนอกการต่อสู้แล้ว
-                        -- ไม่ใช้เวลารอ 1.5 วินาทีเป็นหลักฐาน
                         D.HistoryUnknown = false
                     end
                 end
@@ -12299,7 +12267,7 @@ do
 
     local dungeonDodge
 
-    -- HoldDungeonDodgePoint = ค้างตำแหน่งหลบโดยไม่ล้างเป้าหมาย
+    -- HoldDungeonDodgePoint = ค้างตำแหน่งหลบโดยไม่ล้างเป้าหมาย (Rigid Snap)
     local function HoldDungeonDodgePoint(humanoid, root, point)
         if dungeonHover and (
             dungeonHover.Root ~= root
@@ -12321,12 +12289,12 @@ do
             position.Mode = Enum.PositionAlignmentMode.OneAttachment
             position.Attachment0 = attachment
             position.ApplyAtCenterOfMass = true
-            position.RigidityEnabled = false
-            position.Responsiveness = 35
-            position.MaxVelocity = 60
+            position.RigidityEnabled = true
+            position.Responsiveness = 50
+            position.MaxVelocity = 100
             position.MaxForce = math.max(
-                10000,
-                root.AssemblyMass * math.max(workspace.Gravity, 1) * 40
+                20000,
+                root.AssemblyMass * math.max(workspace.Gravity, 1) * 50
             )
             position.Position = point
             position.Parent = root
@@ -12335,10 +12303,10 @@ do
             orientation.Name = "ZeroXDungeonHoverOrientation"
             orientation.Mode = Enum.OrientationAlignmentMode.OneAttachment
             orientation.Attachment0 = attachment
-            orientation.RigidityEnabled = false
-            orientation.Responsiveness = 35
-            orientation.MaxTorque = 500000
-            orientation.MaxAngularVelocity = 20
+            orientation.RigidityEnabled = true
+            orientation.Responsiveness = 50
+            orientation.MaxTorque = 1000000
+            orientation.MaxAngularVelocity = 40
             orientation.CFrame = root.CFrame.Rotation
             orientation.Parent = root
 
@@ -12352,12 +12320,14 @@ do
             }
         end
 
-        local facing = CFrame.new(point) * root.CFrame.Rotation
+        local facing = CFrame.new(point, point + root.CFrame.LookVector)
 
         humanoid.AutoRotate = false
         humanoid:Move(Vector3.zero, false)
 
+        dungeonHover.Position.RigidityEnabled = true
         dungeonHover.Position.Position = point
+        dungeonHover.Orientation.RigidityEnabled = true
         dungeonHover.Orientation.CFrame = facing.Rotation
 
         root.CFrame = facing
@@ -12729,7 +12699,9 @@ do
         end
 
         humanoid.AutoRotate = false
+        dungeonHover.Position.RigidityEnabled = false
         dungeonHover.Position.Position = destination
+        dungeonHover.Orientation.RigidityEnabled = false
         dungeonHover.Orientation.CFrame = facing.Rotation
 
         -- facing มีตำแหน่งด้านหลังปัจจุบันและหันเข้าหามอนแล้ว
@@ -12877,12 +12849,13 @@ do
         return false
     end
 
-    -- StepDungeonDodge = หลบเฉพาะเมื่อเปิด Auto Dodge Skill
+    -- StepDungeonDodge = วาปหลบสกิลในดันเจี้ยน เข้าพื้นที่ปลอดภัยหรือวงสีเขียว
     -- true หมายถึงรอบนี้ให้ระบบหลบควบคุมต่อ ห้ามวาร์ปกลับไปตี
     local function StepDungeonDodge()
-        local toggle = Options.ZeroXAutoDodgeBossSkill
+        local dodgeOn = (Options.ZeroXDungeonAutoDodge and Options.ZeroXDungeonAutoDodge.Value == true)
+            or (Options.ZeroXAutoDodgeBossSkill and Options.ZeroXAutoDodgeBossSkill.Value == true)
 
-        if not toggle or toggle.Value ~= true then
+        if not dodgeOn then
             if dungeonDodge then
                 dungeonDodge = nil
                 StopDungeonHover()
@@ -12899,62 +12872,32 @@ do
             return true
         end
 
-        if not danger or type(danger.Evaluate) ~= "function"
-            or type(danger.Events) ~= "table" then
-            StopDungeonHover()
-            NativeAuto(false)
-            Report("Dodge: waiting for Dungeon danger data")
-            return true
+        if not danger or type(danger.Events) ~= "table" then
+            return false
         end
 
-        -- Evaluate จะล้าง Event ที่หมดอายุตามข้อมูลเดิม
-        local currentState, currentReason = danger.Evaluate(root.Position)
+        local now = os.clock()
+        for i = #danger.Events, 1, -1 do
+            local ev = danger.Events[i]
+            if ev.Expires and now >= ev.Expires then
+                table.remove(danger.Events, i)
+            end
+        end
 
-        if currentState == "CLEAR_OF_OBSERVED"
-            and #danger.Events == 0 then
-
+        if #danger.Events == 0 then
             if dungeonDodge then
                 dungeonDodge = nil
                 StopDungeonHover()
             end
-
-            -- กลับไปเปิด Native และตีเป้าหมายที่จำไว้
             return false
         end
 
-        if not dungeonDodge or dungeonDodge.Root ~= root then
-            StopDungeonHover()
-
-            dungeonDodge = {
-                Root = root,
-                Character = LocalPlayer.Character,
-                Point = nil,
-                SearchAt = nil,
-            }
-        end
-
-        -- หยุด Native เดิน/ตีระหว่างหลบ ไม่ปิด Toggle ของผู้ใช้
-        if not NativeAuto(false) then
-            return true
-        end
-
-        if currentState == "UNKNOWN" then
-            StopDungeonHover()
-            Report("Dodge blocked: " .. tostring(currentReason))
-            return true
-        end
-
-        local session = dungeonDodge
-        local myRevision = revision
         local stand = humanoid.HipHeight + root.Size.Y / 2
-
         if not Number(stand) or stand <= 0 then
-            Report("Dodge blocked: invalid character clearance")
-            return true
+            stand = 3
         end
 
         local excluded = { LocalPlayer.Character }
-
         for _, name in ipairs({ "Monsters", "LumiBossFx" }) do
             local instance = workspace:FindFirstChild(name)
             if instance then
@@ -12967,7 +12910,6 @@ do
         floorParams.FilterDescendantsInstances = excluded
         floorParams.RespectCanCollide = true
 
-        -- ระยะค้นหาพื้นเป็น Budget ของสคริปต์ ไม่ใช่ขอบเขตเกม
         local floorOriginHeight = stand + DUNGEON_HOVER_HEIGHT
         local floorDepth = 96
 
@@ -12977,114 +12919,162 @@ do
             floorParams
         )
 
-        if not referenceFloor then
-            StopDungeonHover()
-            Report("Dodge: waiting for loaded floor")
-            return true
-        end
+        local refFloorY = referenceFloor and referenceFloor.Position.Y or (root.Position.Y - stand)
 
-        local function ValidatePoint(candidate)
-            local floorHit = workspace:Raycast(
-                candidate + Vector3.new(0, floorOriginHeight, 0),
+        local function GetFloorPoint(candidatePos)
+            local hit = workspace:Raycast(
+                candidatePos + Vector3.new(0, floorOriginHeight + 10, 0),
                 Vector3.new(0, -floorDepth, 0),
                 floorParams
             )
-
-            if not floorHit or floorHit.Normal.Y < 0.8 then
-                return nil
+            local floorY = hit and hit.Position.Y or refFloorY
+            if hit and math.abs(floorY - refFloorY) > 20 then
+                floorY = refFloorY
             end
-
-            -- ไม่เลือกพื้นต่างระดับมากจากพื้นปัจจุบัน
-            if math.abs(
-                floorHit.Position.Y - referenceFloor.Position.Y
-            ) > stand then
-                return nil
-            end
-
-            local point = Vector3.new(
-                candidate.X,
-                floorHit.Position.Y + stand + DUNGEON_HOVER_HEIGHT,
-                candidate.Z
+            return Vector3.new(
+                candidatePos.X,
+                floorY + stand + DUNGEON_HOVER_HEIGHT,
+                candidatePos.Z
             )
+        end
 
+        -- 1. ตรวจสอบสกิลบอสที่มีพื้นที่สีเขียว (Green Safe Zone) เช่น Doom Nova
+        local activeSafeZone = nil
+        local activeSkillName = "Boss Skill"
+
+        for _, event in ipairs(danger.Events) do
+            for _, zone in ipairs(event.Zones) do
+                if zone.Safe == true and typeof(zone.Center) == "Vector3" then
+                    activeSafeZone = zone
+                    activeSkillName = event.SkillName or activeSkillName
+                    break
+                end
+            end
+            if activeSafeZone then break end
+        end
+
+        if activeSafeZone then
+            local greenCenter = activeSafeZone.Center
+            local greenRadius = (Number(activeSafeZone.Radius) and activeSafeZone.Radius > 0)
+                and activeSafeZone.Radius
+                or 8.75
+
+            local greenPoint = GetFloorPoint(greenCenter)
+            local distToCenter = Vector3.new(
+                root.Position.X - greenCenter.X,
+                0,
+                root.Position.Z - greenCenter.Z
+            ).Magnitude
+
+            local insideGreen = distToCenter <= math.max(1, greenRadius - 1.5)
+
+            NativeAuto(false)
+
+            if not insideGreen or not dungeonDodge or dungeonDodge.Kind ~= "green" then
+                dungeonDodge = {
+                    Root = root,
+                    Character = LocalPlayer.Character,
+                    Point = greenPoint,
+                    Kind = "green",
+                }
+                HoldDungeonDodgePoint(humanoid, root, greenPoint)
+                Report("Dodging: วาปเข้าพื้นที่สีเขียว (" .. tostring(activeSkillName) .. ")")
+                return true
+            else
+                HoldDungeonDodgePoint(humanoid, root, greenPoint)
+                Report("Dodging: หลบอยู่ในพื้นที่สีเขียว (" .. tostring(activeSkillName) .. ")")
+                return true
+            end
+        end
+
+        -- 2. สกิลทั่วไป (Cone, Line, Circle, Charge) ที่ไม่มีพื้นที่สีเขียว
+        local currentState, currentReason = danger.Evaluate(root.Position)
+
+        if currentState == "CLEAR_OF_OBSERVED" then
+            if dungeonDodge and dungeonDodge.Point then
+                -- ถ้ากำลังค้างตำแหน่งหลบอยู่ และยังมีอันตรายในห้อง ให้ค้างจนกว่าสกิลจะหมดอายุ
+                NativeAuto(false)
+                HoldDungeonDodgePoint(humanoid, root, dungeonDodge.Point)
+                Report("Dodging: ปลอดภัยแล้ว รอสกิลสิ้นสุด (" .. tostring(danger.Events[1] and danger.Events[1].SkillName or "hazard") .. ")")
+                return true
+            end
+            -- ปลอดภัยและไม่ได้อยู่ในสถานะหลบ สามารถให้ระบบตีต่อได้
+            return false
+        end
+
+        -- ตัวละครอยู่ในเขตอันตราย ต้องหาวาร์ปไปจุดปลอดภัย
+        NativeAuto(false)
+
+        local session = dungeonDodge
+        if not session or session.Root ~= root or session.Kind == "green" then
+            session = {
+                Root = root,
+                Character = LocalPlayer.Character,
+                Point = nil,
+                Kind = "aoe",
+            }
+            dungeonDodge = session
+        end
+
+        local function ValidatePoint(candidate)
+            local point = GetFloorPoint(candidate)
             if danger.Evaluate(point) ~= "CLEAR_OF_OBSERVED" then
                 return nil
             end
-
-            local displacement = point - root.Position
-
-            if displacement.Magnitude > 0.01
-                and workspace:Raycast(
-                    root.Position,
-                    displacement,
-                    hoverWallParams
-                ) then
-                return nil
-            end
-
             return point
         end
 
-        local destination = session.Point
-            and ValidatePoint(session.Point)
+        local destination = session.Point and ValidatePoint(session.Point)
 
         if not destination then
-            local now = os.clock()
-
-            -- จำกัดการค้นหา ไม่สร้าง Loop/Worker เพิ่ม
-            if session.SearchAt and now - session.SearchAt < 0.2 then
-                Report("Dodge: waiting to recheck geometry")
-                return true
-            end
-
-            session.SearchAt = now
-
             local candidates = {}
-            local padding = math.max(root.Size.X, root.Size.Z) / 2 + 1
+            local padding = math.max(root.Size.X, root.Size.Z) / 2 + 2
 
-            local function Offer(point)
-                if #candidates < 64 and typeof(point) == "Vector3" then
-                    candidates[#candidates + 1] = point
+            local function Offer(pos)
+                if #candidates < 64 and typeof(pos) == "Vector3" then
+                    candidates[#candidates + 1] = pos
                 end
             end
 
-            Offer(root.Position)
+            -- ตรวจสอบรอบตัวมอนสเตอร์ก่อน เพื่อให้ยังอยู่ในระยะโจมตี
+            local targetModel = dungeonAttack.Target
+            local targetPart = targetModel and (targetModel.PrimaryPart or targetModel:FindFirstChild("HumanoidRootPart"))
+            if targetPart and targetPart:IsA("BasePart") then
+                local monsterPos = targetPart.Position
+                local checkDist = 14
+                for i = 0, 15 do
+                    local angle = i * math.pi * 2 / 16
+                    Offer(Vector3.new(
+                        monsterPos.X + math.cos(angle) * checkDist,
+                        root.Position.Y,
+                        monsterPos.Z + math.sin(angle) * checkDist
+                    ))
+                end
+            end
 
+            -- ตรวจสอบจุดรอบนอกโซนอันตราย
             for _, event in ipairs(danger.Events) do
                 if #candidates >= 64 then break end
-
                 for _, zone in ipairs(event.Zones) do
                     if #candidates >= 64 then break end
 
-                    if typeof(zone.Center) == "Vector3" then
-                        if zone.Safe == true then
+                    if typeof(zone.Center) == "Vector3" and Number(zone.Radius) and zone.Radius > 0 then
+                        for i = 0, 11 do
+                            local angle = i * math.pi * 2 / 12
+                            local r = zone.Radius + padding + 3
                             Offer(Vector3.new(
-                                zone.Center.X,
+                                zone.Center.X + math.cos(angle) * r,
                                 root.Position.Y,
-                                zone.Center.Z
+                                zone.Center.Z + math.sin(angle) * r
                             ))
-                        elseif Number(zone.Radius) and zone.Radius >= 0 then
-                            -- จุดนอกวงครอบพื้นที่โจมตี
-                            for i = 0, 11 do
-                                local angle = i * math.pi * 2 / 12
-                                local radius = zone.Radius + padding
-
-                                Offer(Vector3.new(
-                                    zone.Center.X + math.cos(angle) * radius,
-                                    root.Position.Y,
-                                    zone.Center.Z + math.sin(angle) * radius
-                                ))
-                            end
                         end
                     end
 
                     if typeof(zone.CFrame) == "CFrame"
                         and Number(zone.Width) and zone.Width > 0
                         and Number(zone.Length) and zone.Length > 0 then
-
-                        local x = zone.Width / 2 + padding
-                        local z = zone.Length / 2 + padding
-
+                        local x = zone.Width / 2 + padding + 3
+                        local z = zone.Length / 2 + padding + 3
                         for _, offset in ipairs({
                             Vector3.new(x, 0, 0),
                             Vector3.new(-x, 0, 0),
@@ -13095,20 +13085,27 @@ do
                             Vector3.new(x, 0, -z),
                             Vector3.new(-x, 0, -z),
                         }) do
-                            local point =
-                                zone.CFrame:PointToWorldSpace(offset)
-
-                            Offer(Vector3.new(
-                                point.X, root.Position.Y, point.Z
-                            ))
+                            local worldPt = zone.CFrame:PointToWorldSpace(offset)
+                            Offer(Vector3.new(worldPt.X, root.Position.Y, worldPt.Z))
                         end
                     end
                 end
             end
 
+            -- ตรวจสอบรัศมีรอบตัวผู้เล่น
+            for _, r in ipairs({ 16, 26, 40 }) do
+                for i = 0, 11 do
+                    local angle = i * math.pi * 2 / 12
+                    Offer(Vector3.new(
+                        root.Position.X + math.cos(angle) * r,
+                        root.Position.Y,
+                        root.Position.Z + math.sin(angle) * r
+                    ))
+                end
+            end
+
             table.sort(candidates, function(a, b)
-                return (a - root.Position).Magnitude
-                    < (b - root.Position).Magnitude
+                return (a - root.Position).Magnitude < (b - root.Position).Magnitude
             end)
 
             for _, candidate in ipairs(candidates) do
@@ -13121,24 +13118,12 @@ do
 
         if not destination then
             StopDungeonHover()
-            Report("Dodge blocked: no point passed geometry / floor checks")
-            return true
-        end
-
-        if not alive or not enabled or not owner
-            or revision ~= myRevision
-            or dungeonDodge ~= session
-            or session.Character ~= LocalPlayer.Character
-            or humanoid.RootPart ~= root
-            or workspace:GetAttribute("PlaceRole") ~= "Dungeon"
-            or workspace:GetAttribute("DungeonState") ~= "running"
-            or LocalPlayer:GetAttribute("DungeonDowned") == true
-            or LocalPlayer.GameplayPaused then
+            Report("Dodge: หาจุดปลอดภัยไม่ได้ (" .. tostring(currentReason) .. ")")
             return true
         end
 
         HoldDungeonDodgePoint(humanoid, root, destination)
-        Report("Dodging: holding outside observed skill zones")
+        Report("Dodging: วาปหลบออกจากพื้นที่อันตราย (" .. tostring(currentReason) .. ")")
         return true
     end
 
@@ -13701,6 +13686,12 @@ do
                 Report("Waiting: Dungeon prerequisites")
             end
         end,
+    })
+
+    entrySection:AddToggle("ZeroXDungeonAutoDodge", {
+        Title = "Auto Dodge Skill (Dungeon)",
+        Description = "วาปหลบสกิลบอสและมอนสเตอร์ในดันเจี้ยน หลบเข้าพื้นที่สีเขียวอัตโนมัติ",
+        Default = true,
     })
 
     rewardSection:AddToggle("ZeroXDungeonAutoChest", {
