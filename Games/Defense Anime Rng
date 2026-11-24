@@ -1,0 +1,3235 @@
+--[[
+    Zero X — Defends Anime RNG / Defeat Anime Bosses
+    Universal High-Performance Automation Hub
+    
+    Features:
+      • Smart Farm: Dynamic Base detection, Multi-target priority (Boss/Lowest HP/Closest),
+        Automatic target approach, independent Auto Swing, Auto Equip & Auto Buy Best Weapons.
+      • Drops Magnet: Zero-latency instant collection of Cash and XP drops via server remotes.
+      • Auto Upgrades: Instantly buys affordable upgrades discovered from game config.
+      • Zone Progression: Auto buy next zone & Auto travel to highest unlocked zone.
+      • Units & Roll: AFK Auto Roll, Auto Equip Best, Auto Fuse, finished unit process claims.
+      • Rewards: Auto Redeem All Codes (from CodesConfig), Auto Claim Daily, Battlepass, Group & Offline rewards.
+      • Visuals & ESP: Enemy & Boss ESP, health bars, distance markers, live HUD.
+      • Player Utilities: Fly, Noclip, Speed, Infinite Jump, FPS Boost, Auto Reconnect.
+]]
+
+local BASE = (getgenv and getgenv().MacUIBase) or "https://raw.githubusercontent.com/Kiwzu/Mac-OS-UI-LUA/refs/heads/main/"
+
+local MacUI = loadstring(game:HttpGet(BASE .. "MacUIFramework.lua"))()
+local SaveManager = loadstring(game:HttpGet(BASE .. "SaveManager.lua"))()
+local InterfaceManager = loadstring(game:HttpGet(BASE .. "InterfaceManager.lua"))()
+local ThemeManager = loadstring(game:HttpGet(BASE .. "ThemeManager.lua"))()
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local Lighting = game:GetService("Lighting")
+local PromptService = game:GetService("ProximityPromptService")
+local TeleportService = game:GetService("TeleportService")
+local GuiService = game:GetService("GuiService")
+local CollectionService = game:GetService("CollectionService")
+
+local LocalPlayer = Players.LocalPlayer
+if not LocalPlayer then
+    warn("[Zero X] This script must run on the client.")
+    return
+end
+
+local Options = MacUI.Options
+
+--------------------------------------------------------------------------------
+-- Game Databases & Remotes Discovery (100% Dynamic / Non-Hardcoded)
+--------------------------------------------------------------------------------
+local DatabasesFolder = ReplicatedStorage:WaitForChild("Databases", 10)
+local RemoteEventsFolder = ReplicatedStorage:WaitForChild("RemoteEvents", 10)
+
+local function SafeRequire(moduleName)
+    if not DatabasesFolder then return nil end
+    local mod = DatabasesFolder:FindFirstChild(moduleName)
+    if mod and mod:IsA("ModuleScript") then
+        local ok, res = pcall(require, mod)
+        if ok and type(res) == "table" then
+            return res
+        end
+    end
+    return nil
+end
+
+local ZoneDatabase = SafeRequire("ZoneDatabase") or {}
+local UpgradeConfig = SafeRequire("UpgradeConfig") or {}
+local WeaponsDatabase = SafeRequire("WeaponsDatabase") or {}
+local CodesConfig = SafeRequire("CodesConfig") or {}
+local UnitDatabase = SafeRequire("UnitDatabase") or {}
+local UnitInventory = (ReplicatedStorage:FindFirstChild("UnitInventory") and require(ReplicatedStorage.UnitInventory))
+local GeneralUseModules = ReplicatedStorage:WaitForChild("GeneralUseModules", 10)
+local ClientSettings = nil
+if GeneralUseModules and GeneralUseModules:FindFirstChild("ClientSettings") then
+    pcall(function()
+        ClientSettings = require(GeneralUseModules.ClientSettings)
+        if ClientSettings and typeof(ClientSettings.Set) == "function" then
+            ClientSettings.Set("RollWarnings", false)
+        end
+    end)
+end
+
+local function GetRemote(name)
+    if not RemoteEventsFolder then return nil end
+    return RemoteEventsFolder:FindFirstChild(name)
+end
+
+-- Key Server Remotes
+local PlayerAttackEvent = GetRemote("PlayerAttackEvent")
+local CollectCashEvent = GetRemote("CollectCashEvent")
+local CollectXpEvent = GetRemote("CollectXpEvent")
+local UpgradeRequestEvent = GetRemote("UpgradeRequestEvent")
+local ZonePurchaseRequestEvent = GetRemote("ZonePurchaseRequestEvent")
+local ZoneTravelRequestEvent = GetRemote("ZoneTravelRequestEvent")
+local AutoRollStartEvent = GetRemote("AutoRollStartEvent")
+local AutoRollStopEvent = GetRemote("AutoRollStopEvent")
+local EquipBestRequestFunction = GetRemote("EquipBestRequestFunction")
+local FuseRequestFunction = GetRemote("FuseRequestFunction")
+local PickUpAllRequestFunction = GetRemote("PickUpAllRequestFunction")
+local BuyWeaponRequestFunction = GetRemote("BuyWeaponRequestFunction")
+local EquipWeaponRequestFunction = GetRemote("EquipWeaponRequestFunction")
+local RedeemCodeFunction = GetRemote("RedeemCodeFunction")
+local ClaimDailyRewardFunction = GetRemote("ClaimDailyRewardFunction")
+local GetDailyRewardStatusFunction = GetRemote("GetDailyRewardStatusFunction")
+local ClaimOfflineRewardEvent = GetRemote("ClaimOfflineRewardEvent")
+local ClaimDoubleOfflineRewardEvent = GetRemote("ClaimDoubleOfflineRewardEvent")
+local ClaimGroupRewardFunction = GetRemote("ClaimGroupRewardFunction")
+local BattlepassFunction = GetRemote("BattlepassFunction")
+local SellUnitsRequestFunction = GetRemote("SellUnitsRequestFunction")
+local AutoRollToggleRarityEvent = GetRemote("AutoRollToggleRarityEvent")
+local AutoBuyToggleEvent = GetRemote("AutoBuyToggleEvent")
+local AutoRollUnitBuyEvent = GetRemote("AutoRollUnitBuyEvent")
+local ConfirmedRollRequestEvent = GetRemote("ConfirmedRollRequestEvent")
+
+--------------------------------------------------------------------------------
+-- Theme Definitions
+--------------------------------------------------------------------------------
+local rgb = Color3.fromRGB
+MacUI:AddTheme("Ocean", {
+    Background = rgb(14, 26, 40),
+    Sidebar = rgb(19, 34, 52),
+    SidebarDivider = rgb(8, 16, 26),
+    Group = rgb(22, 39, 58),
+    GroupStroke = rgb(34, 56, 80),
+    Separator = rgb(36, 58, 82),
+    SubText = rgb(150, 172, 196),
+    Tertiary = rgb(96, 120, 146),
+    Control = rgb(44, 70, 98),
+    ControlHover = rgb(54, 84, 116),
+    ControlStroke = rgb(58, 88, 120),
+    Button = rgb(40, 66, 94),
+    ButtonHover = rgb(50, 80, 112),
+    Field = rgb(12, 22, 34),
+    FieldStroke = rgb(40, 64, 90),
+    Search = rgb(28, 48, 70),
+    SwitchOff = rgb(44, 70, 98),
+    Track = rgb(40, 64, 90),
+    SegmentBg = rgb(30, 52, 76),
+    SegmentSelected = rgb(64, 98, 134),
+    Menu = rgb(22, 39, 58),
+    MenuStroke = rgb(48, 76, 106),
+    Code = rgb(10, 19, 30),
+}, "Dark")
+
+MacUI:AddTheme("Rose", {
+    Background = rgb(252, 245, 247),
+    Sidebar = rgb(246, 231, 236),
+    Group = rgb(255, 255, 255),
+    Search = rgb(238, 222, 228),
+    SegmentBg = rgb(240, 225, 231),
+}, "Light")
+
+--------------------------------------------------------------------------------
+-- Main Window
+--------------------------------------------------------------------------------
+local Window = MacUI:CreateWindow({
+    Title = "Zero X",
+    SubTitle = "Anime RNG",
+    Icon = "swords",
+    IconColor = "Blue",
+    Size = UDim2.fromOffset(840, 610),
+    MinSize = Vector2.new(640, 440),
+    TabWidth = 210,
+    Theme = "Dark",
+    Accent = "Blue",
+    SidebarStyle = "Tile",
+    Profile = { Title = "ZERO X HUB", Subtitle = "Defends Anime RNG" },
+    MinimizeKey = Enum.KeyCode.RightControl,
+    Acrylic = false,
+    KeybindList = false,
+    Search = true,
+    SearchPlaceholder = "Search features...",
+    Spotlight = true,
+    SpotlightKey = Enum.KeyCode.K,
+    Resizable = true,
+    ConfirmClose = true,
+    ReplaceExisting = true,
+    ShowDock = false,
+    Loading = false,
+    Undo = true,
+    PerformanceGuard = true,
+})
+
+--------------------------------------------------------------------------------
+-- Draggable Logo
+--------------------------------------------------------------------------------
+do
+    local screenGui = Window.ScreenGui
+    if screenGui and screenGui:IsA("ScreenGui") then
+        local LOGO_IMAGE = "rbxassetid://138334792995002"
+        local ICON_SIZE = 64
+        local TOP_OFFSET = 12
+        local DRAG_THRESHOLD = 6
+        local EDGE_MARGIN = 8
+
+        local connections = {}
+        local function Connect(signal, callback)
+            local connection = signal:Connect(callback)
+            table.insert(connections, connection)
+            return connection
+        end
+
+        local holder = Instance.new("Frame")
+        holder.Name = "ZeroXLogoHolder"
+        holder.Size = UDim2.fromOffset(ICON_SIZE + 12, ICON_SIZE + 28)
+        holder.Position = UDim2.new(0.5, -(ICON_SIZE + 12) / 2, 0, TOP_OFFSET)
+        holder.BackgroundTransparency = 1
+        holder.Visible = Window.Shown == false
+        holder.ZIndex = 50
+        holder.Parent = screenGui
+
+        local shadow = Instance.new("Frame")
+        shadow.Name = "Shadow"
+        shadow.Position = UDim2.fromOffset(4, 5)
+        shadow.Size = UDim2.fromOffset(ICON_SIZE + 4, ICON_SIZE + 4)
+        shadow.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+        shadow.BackgroundTransparency = 0.65
+        shadow.BorderSizePixel = 0
+        shadow.ZIndex = 50
+        shadow.Parent = holder
+
+        local shadowCorner = Instance.new("UICorner")
+        shadowCorner.CornerRadius = UDim.new(0, 20)
+        shadowCorner.Parent = shadow
+
+        local logoButton = Instance.new("ImageButton")
+        logoButton.Name = "ZeroXLogoButton"
+        logoButton.Position = UDim2.fromOffset(6, 0)
+        logoButton.Size = UDim2.fromOffset(ICON_SIZE, ICON_SIZE)
+        logoButton.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+        logoButton.BorderSizePixel = 0
+        logoButton.Image = ""
+        logoButton.AutoButtonColor = false
+        logoButton.Active = true
+        logoButton.ZIndex = 51
+        logoButton.Parent = holder
+        logoButton.BackgroundTransparency = 1
+
+        local visual = Instance.new("Frame")
+        visual.Name = "LogoSurface"
+        visual.AnchorPoint = Vector2.new(0.5, 0.5)
+        visual.Position = UDim2.fromScale(0.5, 0.5)
+        visual.Size = UDim2.fromScale(1, 1)
+        visual.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+        visual.BorderSizePixel = 0
+        visual.ZIndex = 51
+        visual.Parent = logoButton
+
+        local visualScale = Instance.new("UIScale")
+        visualScale.Parent = visual
+
+        local corner = Instance.new("UICorner")
+        corner.CornerRadius = UDim.new(0, 18)
+        corner.Parent = visual
+
+        local border = Instance.new("UIStroke")
+        border.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+        border.Color = Color3.fromRGB(190, 190, 195)
+        border.Transparency = 0.65
+        border.Thickness = 1
+        border.Parent = visual
+
+        local logoImage = Instance.new("ImageLabel")
+        logoImage.Name = "Logo"
+        logoImage.AnchorPoint = Vector2.new(0.5, 0.5)
+        logoImage.Position = UDim2.fromScale(0.5, 0.5)
+        logoImage.Size = UDim2.fromOffset(ICON_SIZE - 12, ICON_SIZE - 12)
+        logoImage.BackgroundTransparency = 1
+        logoImage.Image = LOGO_IMAGE
+        logoImage.ScaleType = Enum.ScaleType.Fit
+        logoImage.ZIndex = 52
+        logoImage.Parent = visual
+
+        local effectTweens = {}
+        local hovered = false
+        local function Animate(target, properties, instant, duration)
+            if effectTweens[target] then
+                effectTweens[target]:Cancel()
+                effectTweens[target] = nil
+            end
+            if instant then
+                for key, value in pairs(properties) do
+                    target[key] = value
+                end
+                return
+            end
+            local tween = TweenService:Create(target,
+                TweenInfo.new(duration or 0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+                properties)
+            effectTweens[target] = tween
+            tween:Play()
+        end
+
+        local function SetEffect(pressed, instant)
+            local highlighted = hovered or pressed
+            Animate(visualScale, { Scale = pressed and 0.96 or (hovered and 1.08 or 1) }, instant)
+            Animate(visual, {
+                Position = UDim2.new(0.5, 0, 0.5, pressed and 0 or (hovered and -3 or 0)),
+            }, instant)
+            Animate(border, {
+                Color = highlighted and Color3.fromRGB(95, 175, 255) or Color3.fromRGB(190, 190, 195),
+                Transparency = highlighted and 0.12 or 0.65,
+                Thickness = highlighted and 1.8 or 1,
+            }, instant)
+            Animate(shadow, {
+                BackgroundTransparency = highlighted and 0.5 or 0.65,
+                Position = UDim2.fromOffset(4, hovered and 8 or 5),
+            }, instant)
+        end
+
+        local activeInput, startPointer, startPosition, moved = nil, nil, nil, false
+
+        local function SetPositionClamped(position)
+            local bounds = screenGui.AbsoluteSize
+            local size = holder.AbsoluteSize
+            local marginX = math.min(EDGE_MARGIN, math.max(0, (bounds.X - size.X) / 2))
+            local marginY = math.min(EDGE_MARGIN, math.max(0, (bounds.Y - size.Y) / 2))
+            local x = math.clamp(position.X, marginX, math.max(marginX, bounds.X - size.X - marginX))
+            local y = math.clamp(position.Y, marginY, math.max(marginY, bounds.Y - size.Y - marginY))
+            holder.Position = UDim2.fromOffset(x, y)
+        end
+
+        local function GetLocalPosition()
+            local bounds = screenGui.AbsoluteSize
+            local position = holder.Position
+            return Vector2.new(position.X.Scale * bounds.X + position.X.Offset, position.Y.Scale * bounds.Y + position.Y.Offset)
+        end
+
+        local function ResetDrag()
+            activeInput = nil
+            startPointer = nil
+            startPosition = nil
+            moved = false
+            SetEffect(false)
+        end
+
+        Connect(logoButton.MouseEnter, function()
+            if MacUI.Unloaded or not holder.Visible then return end
+            hovered = true
+            SetEffect(activeInput ~= nil)
+        end)
+
+        Connect(logoButton.MouseLeave, function()
+            hovered = false
+            SetEffect(activeInput ~= nil)
+        end)
+
+        Connect(logoButton.InputBegan, function(input)
+            if activeInput or MacUI.Unloaded or not holder.Visible then return end
+            local inputType = input.UserInputType
+            if inputType ~= Enum.UserInputType.MouseButton1 and inputType ~= Enum.UserInputType.Touch then return end
+            activeInput = input
+            startPointer = Vector2.new(input.Position.X, input.Position.Y)
+            startPosition = GetLocalPosition()
+            moved = false
+            SetEffect(true)
+        end)
+
+        Connect(UserInputService.InputChanged, function(input)
+            if not activeInput or not holder.Visible then return end
+            if activeInput.UserInputType == Enum.UserInputType.Touch then
+                if input ~= activeInput then return end
+            elseif input.UserInputType ~= Enum.UserInputType.MouseMovement then
+                return
+            end
+            local pointer = Vector2.new(input.Position.X, input.Position.Y)
+            local delta = pointer - startPointer
+            if delta.Magnitude >= DRAG_THRESHOLD then moved = true end
+            if moved then SetPositionClamped(startPosition + delta) end
+        end)
+
+        Connect(UserInputService.InputEnded, function(input)
+            if not activeInput or input ~= activeInput then return end
+            local shouldOpen = not moved and holder.Visible and input.UserInputState ~= Enum.UserInputState.Cancel
+            ResetDrag()
+            if shouldOpen and not MacUI.Unloaded and not Window.Loading then
+                Window:Restore()
+            end
+        end)
+
+        Connect(UserInputService.WindowFocusReleased, function()
+            ResetDrag()
+        end)
+
+        Connect(screenGui:GetPropertyChangedSignal("AbsoluteSize"), function()
+            ResetDrag()
+            SetPositionClamped(GetLocalPosition())
+        end)
+
+        local originalSetVisible = Window.SetVisible
+        local function SetVisibleWithLogo(self, visible, instant)
+            originalSetVisible(self, visible, instant)
+            if holder.Parent then
+                ResetDrag()
+                holder.Visible = self.Shown == false
+            end
+        end
+        Window.SetVisible = SetVisibleWithLogo
+
+        MacUI:OnUnload(function()
+            for _, connection in ipairs(connections) do
+                connection:Disconnect()
+            end
+            table.clear(connections)
+            if Window.SetVisible == SetVisibleWithLogo then
+                Window.SetVisible = originalSetVisible
+            end
+            for target, tween in pairs(effectTweens) do
+                tween:Cancel()
+            end
+            holder:Destroy()
+        end)
+    end
+end
+
+--------------------------------------------------------------------------------
+-- Navigation Tabs
+--------------------------------------------------------------------------------
+local Tabs = {
+    Home = Window:AddTab({ Title = "Home", Icon = "home" }),
+    SmartFarm = Window:AddTab({ Title = "Smart Farm", Icon = "swords" }),
+    Progress = Window:AddTab({ Title = "Upgrades", Icon = "trending-up" }),
+    UnitsRoll = Window:AddTab({ Title = "Units & Roll", Icon = "dices" }),
+    Activities = Window:AddTab({ Title = "Activities", Icon = "map" }),
+    Rewards = Window:AddTab({ Title = "Rewards", Icon = "gift" }),
+    Visuals = Window:AddTab({ Title = "Visuals", Icon = "eye" }),
+    Player = Window:AddTab({ Title = "Player", Icon = "user" }),
+    Appearance = Window:AddTab({ Title = "Settings", Icon = "palette", Section = "Settings" }),
+    Profiles = Window:AddTab({ Title = "Profiles", Icon = "folder" }),
+}
+
+--------------------------------------------------------------------------------
+-- Dynamic Base & Game Helpers
+--------------------------------------------------------------------------------
+local cachedBase = nil
+local lastBaseCheck = 0
+
+local function GetPlayerBase()
+    local now = os.clock()
+    if cachedBase and cachedBase.Parent and (now - lastBaseCheck < 2) then
+        return cachedBase
+    end
+    lastBaseCheck = now
+
+    local bases = workspace:FindFirstChild("Bases")
+    if not bases then return nil end
+
+    local uidStr = tostring(LocalPlayer.UserId)
+    local nameStr = LocalPlayer.Name
+
+    for _, b in ipairs(bases:GetChildren()) do
+        local o = b:FindFirstChild("Owner")
+        if o and (o.Value == uidStr or o.Value == nameStr) then
+            cachedBase = b
+            return b
+        end
+        local attr = b:GetAttribute("Owner") or b:GetAttribute("OwnerUserId")
+        if attr and (tostring(attr) == uidStr or tostring(attr) == nameStr) then
+            cachedBase = b
+            return b
+        end
+    end
+    return nil
+end
+
+local function GetPlayerMoney()
+    local attribute = LocalPlayer:GetAttribute("Money")
+    if type(attribute) == "number" then return attribute end
+    local ls = LocalPlayer:FindFirstChild("leaderstats")
+    if ls then
+        local money = ls:FindFirstChild("Money") or ls:FindFirstChild("Gold")
+        if money and typeof(money.Value) == "number" then
+            return money.Value
+        end
+    end
+    return 0
+end
+
+local function GetCurrentZoneName()
+    local base = GetPlayerBase()
+    if base then
+        local cz = base:FindFirstChild("CurrentZone")
+        if cz and cz:IsA("StringValue") and cz.Value ~= "" then
+            return cz.Value
+        end
+    end
+    local attr = LocalPlayer:GetAttribute("CurrentZone")
+    if attr and attr ~= "" then return tostring(attr) end
+    return "Wisteria"
+end
+
+--------------------------------------------------------------------------------
+-- 1. HOME: Overview & Live HUD
+--------------------------------------------------------------------------------
+do
+    local HomeSection = Tabs.Home:AddSection({
+        Title = "Zero X · Defends Anime RNG",
+        Icon = "zap",
+    })
+
+    HomeSection:AddParagraph({
+        Title = "Status & Live Base Information",
+        Content = "Initializing dynamic base detector...",
+    })
+
+    local InfoLabelBase = HomeSection:AddLabel({
+        Title = "Player Base",
+        Value = "Detecting...",
+    })
+
+    local InfoLabelZone = HomeSection:AddLabel({
+        Title = "Current Zone",
+        Value = "Detecting...",
+    })
+
+    local InfoLabelEnemies = HomeSection:AddLabel({
+        Title = "Enemies in Base",
+        Value = "0",
+    })
+
+    local InfoLabelWeapon = HomeSection:AddLabel({
+        Title = "Equipped Weapon",
+        Value = "None",
+    })
+
+    local InfoLabelMoney = HomeSection:AddLabel({
+        Title = "Money",
+        Value = "0",
+    })
+
+    local QuickSection = Tabs.Home:AddSection({
+        Title = "Quick Actions",
+        Icon = "sparkles",
+    })
+
+    QuickSection:AddButton({
+        Title = "Return to Base",
+        Description = "ระบบกลับฐานของผู้เล่นทันที",
+        ButtonText = "Return",
+        Callback = function()
+            local remote = GetRemote("TeleportToBaseRequestEvent")
+            if remote then remote:FireServer() end
+        end,
+    })
+
+    QuickSection:AddButton({
+        Title = "Redeem All Codes",
+        Description = "ระบบใส่โค้ดเกมที่ยังใช้งานได้ให้อัตโนมัติ",
+        ButtonText = "Redeem All",
+        Style = "Primary",
+        Callback = function()
+            if not RedeemCodeFunction then
+                Window:Toast("Redeem", { Detail = "Redeem remote not found", Icon = "alert-triangle" })
+                return
+            end
+            local redeemedCount = 0
+            task.spawn(function()
+                for codeName, definition in pairs(CodesConfig) do
+                    if type(definition) == "table" and not definition.Expired then
+                    pcall(function()
+                        local success = RedeemCodeFunction:InvokeServer(tostring(codeName))
+                        if success == true then redeemedCount = redeemedCount + 1 end
+                    end)
+                    task.wait(0.05)
+                    end
+                end
+                Window:Toast("Codes Redeemed", {
+                    Detail = "Attempted all valid codes. Successfully claimed: " .. redeemedCount,
+                    Icon = "check-circle",
+                    Highlight = true,
+                })
+            end)
+        end,
+    })
+
+    QuickSection:AddButton({
+        Title = "Auto Equip Best Units",
+        Description = "ระบบเลือกยูนิตที่ดีที่สุดมาจัดทีมให้ทันที",
+        ButtonText = "Equip Best",
+        Callback = function()
+            if EquipBestRequestFunction then
+                pcall(function() EquipBestRequestFunction:InvokeServer() end)
+                Window:Toast("Units", { Detail = "Equipped best units", Icon = "check-circle" })
+            end
+        end,
+    })
+
+    QuickSection:AddButton({
+        Title = "Claim All Free Rewards",
+        Description = "ระบบกดรับรางวัลฟรีที่มีให้ทั้งหมด",
+        ButtonText = "Claim All",
+        Style = "Primary",
+        Callback = function()
+            task.spawn(function()
+                if BattlepassFunction then
+                    pcall(function() BattlepassFunction:InvokeServer("ClaimAll") end)
+                end
+                if ClaimGroupRewardFunction then
+                    pcall(function() ClaimGroupRewardFunction:InvokeServer() end)
+                end
+                if LocalPlayer:GetAttribute("OwnsX2OfflineRewardsGamepass") == true and ClaimDoubleOfflineRewardEvent then
+                    pcall(function() ClaimDoubleOfflineRewardEvent:FireServer() end)
+                elseif ClaimOfflineRewardEvent then
+                    pcall(function() ClaimOfflineRewardEvent:FireServer() end)
+                end
+                if GetDailyRewardStatusFunction and ClaimDailyRewardFunction then
+                    pcall(function()
+                        local status = GetDailyRewardStatusFunction:InvokeServer()
+                        if status and status.CanClaim and status.NextDay then
+                            ClaimDailyRewardFunction:InvokeServer(status.NextDay)
+                        end
+                    end)
+                end
+                Window:Toast("Rewards", { Detail = "Reward requests sent", Icon = "gift" })
+            end)
+        end,
+    })
+
+    -- Live HUD update loop
+    task.spawn(function()
+        while not MacUI.Unloaded do
+            local base = GetPlayerBase()
+            local baseName = base and base.Name or "Not Found"
+            local zone = GetCurrentZoneName()
+            local enemiesCount = 0
+            if base then
+                local eh = base:FindFirstChild("EnemiesHolder")
+                local bh = base:FindFirstChild("BossHolder")
+                if eh then enemiesCount = enemiesCount + #eh:GetChildren() end
+                if bh then enemiesCount = enemiesCount + #bh:GetChildren() end
+            end
+            local weapon = LocalPlayer:GetAttribute("EquippedWeapon")
+            if not weapon or weapon == "" then
+                local tool = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Tool")
+                weapon = tool and tool.Name or "None"
+            end
+
+            InfoLabelBase:SetValue(baseName)
+            InfoLabelZone:SetValue(zone)
+            InfoLabelEnemies:SetValue(tostring(enemiesCount))
+            InfoLabelWeapon:SetValue(tostring(weapon))
+            InfoLabelMoney:SetValue(string.format("%d", GetPlayerMoney()))
+            task.wait(1.5)
+        end
+    end)
+end
+
+--------------------------------------------------------------------------------
+-- 2. SMART FARM (Target Approach, Independent Feature Controllers)
+--------------------------------------------------------------------------------
+local farmPausedForUnit = false
+
+do
+    local FarmConfig = {
+        Enabled = false,
+        TargetPriority = "Boss First", -- "Boss First", "Lowest HP", "Closest", "Normal First"
+        AutoAttack = true,
+        AutoEquipWeapon = true,
+        AutoBuyBestWeapon = true,
+        CollectDrops = true,
+        CollectInterval = 0.5,
+    }
+
+    local FarmSection = Tabs.SmartFarm:AddSection({
+        Title = "Smart Auto Farm",
+        Icon = "swords",
+    })
+
+    FarmSection:AddToggle("ZeroXSmartFarmEnabled", {
+        Title = "Enable Smart Farm",
+        Description = "ระบบฟาร์มศัตรูในฐาน โดยเข้าประชิดและโจมตีเป้าหมายอัตโนมัติ",
+        Default = false,
+        Callback = function(val)
+            FarmConfig.Enabled = val
+        end,
+    })
+
+    FarmSection:AddDropdown("ZeroXFarmPriority", {
+        Title = "Targeting Priority",
+        Description = "เลือกว่าให้ฟาร์มบอส ศัตรูเลือดน้อย หรือตัวที่อยู่ใกล้ก่อน",
+        Values = { "Boss First", "Lowest HP", "Closest", "Normal First" },
+        Default = "Boss First",
+        Callback = function(val)
+            FarmConfig.TargetPriority = val
+        end,
+    })
+
+    local WeaponSection = Tabs.SmartFarm:AddSection({
+        Title = "Weapon & Combat Intelligence",
+        Icon = "crosshair",
+    })
+
+    WeaponSection:AddToggle("ZeroXAutoEquipWeapon", {
+        Title = "Auto Equip Best Weapon",
+        Description = "ระบบถืออาวุธที่แรงที่สุดจากอาวุธที่มีอยู่",
+        Default = true,
+        Callback = function(val)
+            FarmConfig.AutoEquipWeapon = val
+        end,
+    })
+
+    WeaponSection:AddToggle("ZeroXAutoBuyBestWeapon", {
+        Title = "Auto Buy Next Weapon",
+        Description = "ระบบซื้ออาวุธที่แรงขึ้นเมื่อมีเงินพอ เปิด Auto Equip เพื่อสวมอาวุธ",
+        Default = true,
+        Callback = function(val)
+            FarmConfig.AutoBuyBestWeapon = val
+        end,
+    })
+
+    WeaponSection:AddToggle("ZeroXAutoAttack", {
+        Title = "Fast Kill Aura / Auto Swing",
+        Description = "ระบบโจมตีอัตโนมัติ เปิดใช้งานแยกจาก Smart Farm ได้",
+        Default = true,
+        Callback = function(val)
+            FarmConfig.AutoAttack = val
+        end,
+    })
+
+    local DropsSection = Tabs.SmartFarm:AddSection({
+        Title = "Instant Drops Magnet",
+        Icon = "magnet",
+    })
+
+    DropsSection:AddToggle("ZeroXCollectDrops", {
+        Title = "Instant Auto Collect Cash & XP",
+        Description = "ระบบเก็บเงินและ EXP ที่ศัตรูดรอปให้โดยอัตโนมัติ",
+        Default = true,
+        Callback = function(val)
+            FarmConfig.CollectDrops = val
+        end,
+    })
+
+    --------------------------------------------------------------------------
+    -- Drops Magnet Execution
+    --------------------------------------------------------------------------
+    local function CollectDrop(drop)
+        if not FarmConfig.CollectDrops or not drop or not drop:IsA("BasePart") then return end
+        local name = drop.Name
+        if name == "CashThing" or name == "XpThing" then
+            local owner = drop:GetAttribute("OwnerUserId")
+            if owner == LocalPlayer.UserId or owner == nil then
+                if name == "CashThing" and CollectCashEvent then
+                    pcall(function() CollectCashEvent:FireServer(drop) end)
+                elseif name == "XpThing" and CollectXpEvent then
+                    pcall(function() CollectXpEvent:FireServer(drop) end)
+                end
+            end
+        end
+    end
+
+    workspace.DescendantAdded:Connect(CollectDrop)
+
+    -- Sweep loop for drops already in workspace
+    task.spawn(function()
+        while not MacUI.Unloaded do
+            if FarmConfig.CollectDrops then
+                for _, child in ipairs(workspace:GetChildren()) do
+                    if child.Name == "CashThing" or child.Name == "XpThing" then
+                        CollectDrop(child)
+                    end
+                end
+            end
+            task.wait(1)
+        end
+    end)
+
+    --------------------------------------------------------------------------
+    -- Weapon Auto-Purchaser & Equipper
+    --------------------------------------------------------------------------
+    local sortedWeapons = {}
+    for name, data in pairs(WeaponsDatabase) do
+        if not data.Unobtainable and data.Price and data.Price > 0 and data.Damage then
+            table.insert(sortedWeapons, {
+                Name = name,
+                Price = data.Price,
+                Damage = data.Damage
+            })
+        end
+    end
+    table.sort(sortedWeapons, function(a, b) return a.Damage < b.Damage end)
+
+    local purchasedDamage = 0
+    local pendingEquipWeapon = nil
+
+    local function BuyBestWeapon()
+        if FarmConfig.AutoBuyBestWeapon and BuyWeaponRequestFunction then
+            local currentWeaponName = LocalPlayer:GetAttribute("EquippedWeapon") or ""
+            local currentDmg = math.max(purchasedDamage, (WeaponsDatabase[currentWeaponName] and WeaponsDatabase[currentWeaponName].Damage) or 0)
+            local money = GetPlayerMoney()
+
+            for i = #sortedWeapons, 1, -1 do
+                local w = sortedWeapons[i]
+                if w.Damage > currentDmg and money >= w.Price then
+                    local bought = BuyWeaponRequestFunction:InvokeServer(w.Name)
+                    if bought then
+                        purchasedDamage = w.Damage
+                        pendingEquipWeapon = w.Name
+                    end
+                    break
+                end
+            end
+        end
+    end
+
+    local function EquipBestWeapon()
+        if not FarmConfig.AutoEquipWeapon then return end
+        local char = LocalPlayer.Character
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        local bp = LocalPlayer:FindFirstChild("Backpack")
+        if not hum or hum.Health <= 0 then return end
+
+        if pendingEquipWeapon and EquipWeaponRequestFunction then
+            local weaponName = pendingEquipWeapon
+            EquipWeaponRequestFunction:InvokeServer(weaponName)
+            if pendingEquipWeapon == weaponName then
+                pendingEquipWeapon = nil
+            end
+            if MacUI.Unloaded or not FarmConfig.AutoEquipWeapon then return end
+        end
+
+        -- Select the strongest owned weapon, including the one currently held.
+        if FarmConfig.AutoEquipWeapon and bp then
+            local currentTool = char:FindFirstChildOfClass("Tool")
+            local bestTool = nil
+            local currentData = currentTool and WeaponsDatabase[currentTool.Name]
+            local bestDmg = currentTool and (currentData and currentData.Damage or 10) or -1
+            for _, item in ipairs(bp:GetChildren()) do
+                if item:IsA("Tool") then
+                    local wData = WeaponsDatabase[item.Name]
+                    local dmg = wData and wData.Damage or 10
+                    if dmg > bestDmg then
+                        bestDmg = dmg
+                        bestTool = item
+                    end
+                end
+            end
+            if bestTool then
+                hum:EquipTool(bestTool)
+            end
+        end
+    end
+
+    -- Separate workers keep a yielding purchase request from blocking equipment or combat.
+    local function StartWeaponWorker(name, step)
+        task.spawn(function()
+            while not MacUI.Unloaded do
+                local ok, err = pcall(step)
+                if not ok then
+                    warn("[Zero X] " .. name .. ": " .. tostring(err))
+                end
+                task.wait(2)
+            end
+        end)
+    end
+
+    StartWeaponWorker("Auto Buy Weapon", BuyBestWeapon)
+    StartWeaponWorker("Auto Equip Weapon", EquipBestWeapon)
+
+    --------------------------------------------------------------------------
+    -- Smart Target Query
+    --------------------------------------------------------------------------
+    local function QueryTargets()
+        local base = GetPlayerBase()
+        if not base then return {} end
+
+        local targets = {}
+        local bossHolder = base:FindFirstChild("BossHolder")
+        local enemiesHolder = base:FindFirstChild("EnemiesHolder")
+
+        local function CheckTarget(model, isBoss)
+            if not model or not model.Parent then return end
+            local hum = model:FindFirstChildOfClass("Humanoid")
+            local hrp = model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart
+            if hum and hum.Health > 0 and hrp then
+                table.insert(targets, {
+                    Model = model,
+                    Humanoid = hum,
+                    RootPart = hrp,
+                    IsBoss = isBoss or model:GetAttribute("IsBoss") == true,
+                    Health = hum.Health,
+                    MaxHealth = hum.MaxHealth,
+                })
+            end
+        end
+
+        if bossHolder then
+            for _, b in ipairs(bossHolder:GetChildren()) do
+                CheckTarget(b, true)
+            end
+        end
+        if enemiesHolder then
+            for _, e in ipairs(enemiesHolder:GetChildren()) do
+                CheckTarget(e, false)
+            end
+        end
+
+        local char = LocalPlayer.Character
+        local playerHrp = char and char:FindFirstChild("HumanoidRootPart")
+        local pPos = playerHrp and playerHrp.Position or Vector3.zero
+
+        if FarmConfig.TargetPriority == "Boss First" then
+            table.sort(targets, function(a, b)
+                if a.IsBoss ~= b.IsBoss then return a.IsBoss end
+                return a.Health < b.Health
+            end)
+        elseif FarmConfig.TargetPriority == "Lowest HP" then
+            table.sort(targets, function(a, b) return a.Health < b.Health end)
+        elseif FarmConfig.TargetPriority == "Closest" and playerHrp then
+            table.sort(targets, function(a, b)
+                return (a.RootPart.Position - pPos).Magnitude < (b.RootPart.Position - pPos).Magnitude
+            end)
+        elseif FarmConfig.TargetPriority == "Normal First" then
+            table.sort(targets, function(a, b)
+                if a.IsBoss ~= b.IsBoss then return not a.IsBoss end
+                return a.Health < b.Health
+            end)
+        end
+
+        return targets
+    end
+
+    --------------------------------------------------------------------------
+    -- Farm Loop Controller
+    --------------------------------------------------------------------------
+    local lastAttackTime = 0
+
+    local function IsTargetInAttackRange(target, playerRoot, isGun)
+        if not target.Model.Parent or not target.RootPart.Parent or target.Humanoid.Health <= 0 then return false end
+        local offset = target.RootPart.Position - playerRoot.Position
+        if isGun then
+            return Vector3.new(offset.X, 0, offset.Z).Magnitude <= 50
+        end
+        if target.Model:GetAttribute("WorldRaidTarget") then
+            local localPosition = target.RootPart.CFrame:PointToObjectSpace(playerRoot.Position)
+            local halfSize = target.RootPart.Size / 2
+            local closest = Vector3.new(
+                math.clamp(localPosition.X, -halfSize.X, halfSize.X),
+                math.clamp(localPosition.Y, -halfSize.Y, halfSize.Y),
+                math.clamp(localPosition.Z, -halfSize.Z, halfSize.Z)
+            )
+            offset = target.RootPart.CFrame:PointToWorldSpace(closest) - playerRoot.Position
+        end
+        local range = math.max(1, target.Model:GetScale()) * 10
+        return math.abs(offset.X) <= range and math.abs(offset.Y) <= range and math.abs(offset.Z) <= range
+    end
+
+    task.spawn(function()
+        while not MacUI.Unloaded do
+            if not farmPausedForUnit and (FarmConfig.Enabled or FarmConfig.AutoAttack) then
+                local char = LocalPlayer.Character
+                local hrp = char and char:FindFirstChild("HumanoidRootPart")
+                local hum = char and char:FindFirstChildOfClass("Humanoid")
+
+                if hrp and hum and hum.Health > 0 then
+                    local targets = FarmConfig.Enabled and QueryTargets() or {}
+                    local currentTarget = targets[1]
+
+                    if currentTarget and currentTarget.RootPart.Parent then
+                        local targetRoot = currentTarget.RootPart
+                        if (hrp.Position - targetRoot.Position).Magnitude > 6 then
+                            hrp.CFrame = targetRoot.CFrame * CFrame.new(0, 0, 3)
+                        end
+                    end
+
+                    if PlayerAttackEvent then
+                        local tool = char:FindFirstChildOfClass("Tool")
+                        local weapon = tool and WeaponsDatabase[tool.Name]
+                        local isGun = weapon and weapon.IsGun == true
+                        if FarmConfig.Enabled and currentTarget then
+                            for _, target in ipairs(targets) do
+                                if not FarmConfig.Enabled or farmPausedForUnit or MacUI.Unloaded then break end
+                                if IsTargetInAttackRange(target, hrp, isGun) then
+                                    local ok, err = pcall(function()
+                                        PlayerAttackEvent:FireServer(target.Model)
+                                    end)
+                                    if not ok then warn("[Zero X] Smart Farm attack: " .. tostring(err)) end
+                                end
+                            end
+                        end
+                        if FarmConfig.AutoAttack then
+                            local now = os.clock()
+                            local swingLv = LocalPlayer:GetAttribute("SwingSpeedLv") or 0
+                            local cooldown = 0.25 / (1 + (swingLv * 0.1))
+
+                            if now - lastAttackTime >= cooldown then
+                                lastAttackTime = now
+                                local ok, err = pcall(function()
+                                    if not isGun then
+                                        PlayerAttackEvent:FireServer()
+                                    end
+                                end)
+                                if not ok then
+                                    warn("[Zero X] Combat: " .. tostring(err))
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+            task.wait(0.03)
+        end
+    end)
+end
+
+--------------------------------------------------------------------------------
+-- 3. UPGRADES & ZONE PROGRESSION
+--------------------------------------------------------------------------------
+do
+    local UpgradesSection = Tabs.Progress:AddSection({
+        Title = "Smart Auto Upgrade",
+        Icon = "trending-up",
+    })
+
+    local autoUpgradeEnabled = false
+    local autoPrestigeUpgradeEnabled = false
+    local queueUpgradeCheck = function() end
+
+    -- Calculate upgrade price dynamically from game config
+    local function GetUpgradeCost(statName, currentLevel)
+        local cfg = UpgradeConfig[statName]
+        if not cfg then return nil, "NoConfig" end
+        local maxLv = cfg.MaxLevel or cfg.MaxLv or 999
+        if currentLevel >= maxLv then
+            return nil, "Max"
+        end
+        local cost = nil
+        if cfg.Prices then
+            cost = cfg.Prices[currentLevel + 1]
+        elseif cfg.BasePrice and cfg.GrowthRate then
+            cost = math.floor(cfg.BasePrice * cfg.GrowthRate ^ (currentLevel - (cfg.ExponentOffset or 0)))
+        end
+        return cost, cfg.Currency or "Money"
+    end
+
+    UpgradesSection:AddToggle("ZeroXAutoUpgradeEnabled", {
+        Title = "Enable Auto Upgrade",
+        Description = "ระบบอัปเกรดค่าสถานะด้วยเงินเมื่อซื้อไหว",
+        Default = false,
+        Callback = function(val)
+            autoUpgradeEnabled = val
+            queueUpgradeCheck()
+        end,
+    })
+
+    UpgradesSection:AddToggle("ZeroXAutoPrestigeUpgrade", {
+        Title = "Auto Upgrade Prestige",
+        Description = "ระบบใช้แต้ม Prestige ซื้ออัปเกรดให้อัตโนมัติ",
+        Default = false,
+        Callback = function(val)
+            autoPrestigeUpgradeEnabled = val
+            queueUpgradeCheck()
+        end,
+    })
+
+    local upgradeStats = {}
+    local watchedAttributes = {}
+    for statName, cfg in pairs(UpgradeConfig) do
+        if type(statName) == "string" and type(cfg) == "table"
+            and (type(cfg.Prices) == "table" or (cfg.BasePrice and cfg.GrowthRate)) then
+            table.insert(upgradeStats, statName)
+            watchedAttributes[statName] = true
+            watchedAttributes[cfg.Currency or "Money"] = true
+        end
+    end
+    table.sort(upgradeStats)
+    local nextUpgradeIndex = 1
+
+    local upgradeConnections = {}
+    local moneyConnection = nil
+    local checkQueued = false
+    local pendingUpgrade = nil
+    local upgradeRetrySeconds = 1
+
+    local function GetUpgradeBalance(currency)
+        if currency == "Money" or currency == "Gold" then
+            return GetPlayerMoney()
+        end
+        return LocalPlayer:GetAttribute(currency) or 0
+    end
+
+    local function CheckUpgrades()
+        if MacUI.Unloaded or (not autoUpgradeEnabled and not autoPrestigeUpgradeEnabled) or not UpgradeRequestEvent then return end
+
+        if pendingUpgrade then
+            local level = LocalPlayer:GetAttribute(pendingUpgrade.Stat) or 0
+            local balance = GetUpgradeBalance(pendingUpgrade.Currency)
+            -- Level and currency can replicate separately; wait for both before spending again.
+            if level == pendingUpgrade.Level
+                or (pendingUpgrade.Cost > 0 and balance == pendingUpgrade.Balance) then
+                return
+            end
+            pendingUpgrade = nil
+        end
+
+        for offset = 0, #upgradeStats - 1 do
+            local index = (nextUpgradeIndex + offset - 1) % #upgradeStats + 1
+            local statName = upgradeStats[index]
+            local currentLv = LocalPlayer:GetAttribute(statName) or 0
+            local cost, currency = GetUpgradeCost(statName, currentLv)
+            local enabled = currency == "PrestigePoints" and autoPrestigeUpgradeEnabled
+                or ((currency == "Money" or currency == "Gold") and autoUpgradeEnabled)
+            local balance = GetUpgradeBalance(currency)
+            if enabled and type(cost) == "number" and cost >= 0 and balance >= cost then
+                local request = {
+                    Stat = statName, Level = currentLv, Cost = cost,
+                    Currency = currency, Balance = balance,
+                }
+                pendingUpgrade = request
+                nextUpgradeIndex = index % #upgradeStats + 1
+                local ok, err = pcall(function()
+                    UpgradeRequestEvent:FireServer(statName)
+                end)
+                if not ok then
+                    warn("[Zero X] Auto upgrade failed for " .. statName .. ": " .. tostring(err))
+                end
+                -- Retry only an unconfirmed request; normal upgrades continue from signals.
+                task.delay(upgradeRetrySeconds, function()
+                    if pendingUpgrade == request then
+                        pendingUpgrade = nil
+                        queueUpgradeCheck()
+                    end
+                end)
+                return
+            end
+        end
+    end
+
+    queueUpgradeCheck = function()
+        if checkQueued or MacUI.Unloaded then return end
+        checkQueued = true
+        task.defer(function()
+            checkQueued = false
+            CheckUpgrades()
+        end)
+    end
+
+    local function BindUpgradeMoney()
+        if moneyConnection then
+            moneyConnection:Disconnect()
+            moneyConnection = nil
+        end
+        local stats = LocalPlayer:FindFirstChild("leaderstats")
+        local money = stats and (stats:FindFirstChild("Money") or stats:FindFirstChild("Gold"))
+        if money and (money:IsA("IntValue") or money:IsA("NumberValue")) then
+            moneyConnection = money:GetPropertyChangedSignal("Value"):Connect(queueUpgradeCheck)
+        end
+        queueUpgradeCheck()
+    end
+
+    table.insert(upgradeConnections, LocalPlayer.AttributeChanged:Connect(function(attribute)
+        if watchedAttributes[attribute] then queueUpgradeCheck() end
+    end))
+
+    local function OnUpgradeMoneyHierarchyChanged(instance)
+        if instance.Name == "leaderstats"
+            or ((instance.Name == "Money" or instance.Name == "Gold")
+                and instance.Parent and instance.Parent.Name == "leaderstats") then
+            task.defer(function()
+                if not MacUI.Unloaded then BindUpgradeMoney() end
+            end)
+        end
+    end
+    table.insert(upgradeConnections, LocalPlayer.DescendantAdded:Connect(OnUpgradeMoneyHierarchyChanged))
+    table.insert(upgradeConnections, LocalPlayer.DescendantRemoving:Connect(OnUpgradeMoneyHierarchyChanged))
+    MacUI:OnUnload(function()
+        for _, connection in ipairs(upgradeConnections) do connection:Disconnect() end
+        if moneyConnection then moneyConnection:Disconnect() end
+        pendingUpgrade = nil
+    end)
+    BindUpgradeMoney()
+
+    --------------------------------------------------------------------------
+    -- Zone Progression
+    --------------------------------------------------------------------------
+    local ZoneSection = Tabs.Progress:AddSection({
+        Title = "Zone Progression & Teleport",
+        Icon = "map",
+    })
+
+    local autoBuyZone = false
+    local autoTravelHighest = false
+    local WorldConfig = SafeRequire("WorldConfig")
+
+    local PrestigeSection = Tabs.Progress:AddSection({
+        Title = "Prestige",
+        Icon = "award",
+    })
+    local prestigeStatus = PrestigeSection:AddLabel({ Title = "Prestige Status", Value = "Checking..." })
+    local autoPrestige = false
+    local prestigeConfig = SafeRequire("XPConfig")
+    local prestigeEvent = GetRemote("PrestigeEvent")
+    local lastPrestigeRequest = 0
+
+    PrestigeSection:AddToggle("ZeroXAutoPrestige", {
+        Title = "Auto Prestige",
+        Description = "ระบบทำ Prestige เมื่อถึงเลเวลที่กำหนด โดยเงินและโซนจะถูกรีเซ็ต",
+        Default = false,
+        Callback = function(enabled)
+            autoPrestige = enabled
+        end,
+    })
+
+    task.spawn(function()
+        while not MacUI.Unloaded do
+            local level = LocalPlayer:GetAttribute("Level")
+            local prestige = LocalPlayer:GetAttribute("Prestige")
+            if type(level) == "number" and type(prestige) == "number" and prestigeConfig and type(prestigeConfig.RequiredLevelForPrestige) == "function" then
+                local ok, required = pcall(prestigeConfig.RequiredLevelForPrestige, prestige)
+                if ok and type(required) == "number" then
+                    prestigeStatus:SetValue(string.format("Prestige %d | Level %d / %d", prestige, level, required))
+                    if autoPrestige and prestigeEvent and level >= required and os.clock() - lastPrestigeRequest >= 5 then
+                        lastPrestigeRequest = os.clock()
+                        local sent, err = pcall(function() prestigeEvent:FireServer() end)
+                        if not sent then warn("[Zero X] Auto Prestige: " .. tostring(err)) end
+                    end
+                else
+                    prestigeStatus:SetValue("Prestige requirement unavailable")
+                end
+            else
+                prestigeStatus:SetValue("Waiting for prestige data")
+            end
+            task.wait(1)
+        end
+    end)
+
+    local function GetNextZoneInfo()
+        local unlockedZone = LocalPlayer:GetAttribute("Zone")
+        for index, zone in ipairs(ZoneDatabase) do
+            if zone.Name == unlockedZone then
+                local nextZone = ZoneDatabase[index + 1]
+                if not nextZone then return nil, nil, nil end
+                if not WorldConfig then return nextZone.Name, nil, false end
+                local ok, world = pcall(WorldConfig.GetWorld, nextZone.Name)
+                if not ok then return nextZone.Name, nil, false end
+                if world == 2 then
+                    local blockOk, block = pcall(function()
+                        return WorldConfig.GetBlock(nextZone.Name, LocalPlayer:GetAttribute("Prestige") or 0,
+                            WorldConfig.KillsFromAttributes(LocalPlayer), LocalPlayer:GetAttribute("World2KillReqLv"))
+                    end)
+                    return nextZone.DisplayName or nextZone.Name, 0, blockOk and block == nil
+                end
+                return nextZone.DisplayName or nextZone.Name, nextZone.Price, type(nextZone.Price) == "number"
+            end
+        end
+        return nil, nil, false
+    end
+
+    local NextZoneInfoLabel = ZoneSection:AddLabel({
+        Title = "Next Zone",
+        Value = "Checking...",
+    })
+
+    ZoneSection:AddToggle("ZeroXAutoBuyZone", {
+        Title = "Auto Buy Next Zone",
+        Description = "ระบบปลดล็อกโซนถัดไปเมื่อผ่านเงื่อนไขและมีเงินพอ",
+        Default = false,
+        Callback = function(val)
+            autoBuyZone = val
+        end,
+    })
+
+    ZoneSection:AddToggle("ZeroXAutoTravelHighest", {
+        Title = "Auto Travel to Highest Zone",
+        Description = "ระบบย้ายฐานไปโซนที่ปลดล็อกสูงที่สุด",
+        Default = false,
+        Callback = function(val)
+            autoTravelHighest = val
+        end,
+    })
+
+    -- Zone Table & Names
+    local zoneList = {}
+    for k, v in pairs(ZoneDatabase) do
+        if typeof(v) == "table" and (v.DisplayName or v.Name) then
+            local zName = v.Name or v.DisplayName
+            table.insert(zoneList, {
+                Key = tostring(k),
+                Name = zName,
+                Cost = v.Cost or v.Price or 0,
+                Order = v.Order or v.Index or tonumber(k) or 1
+            })
+        end
+    end
+    table.sort(zoneList, function(a, b) return a.Order < b.Order end)
+
+    local zoneNames = {}
+    for _, z in ipairs(zoneList) do
+        table.insert(zoneNames, z.Name)
+    end
+
+    local selectedZone = zoneNames[1]
+
+    local function GetHighestUnlockedZone()
+        if not WorldConfig or not WorldConfig.GetBlock or not WorldConfig.GetWorld or not WorldConfig.KillsFromAttributes then return nil end
+        local unlockedName = LocalPlayer:GetAttribute("Zone")
+        local unlockedIndex = nil
+        for index, zone in ipairs(ZoneDatabase) do
+            if zone.Name == unlockedName then unlockedIndex = index break end
+        end
+        if not unlockedIndex then return nil end
+        local prestige = LocalPlayer:GetAttribute("Prestige") or 0
+        local kills = WorldConfig.KillsFromAttributes(LocalPlayer)
+        local killRequirement = LocalPlayer:GetAttribute("World2KillReqLv")
+        local highest = nil
+        for index, zone in ipairs(ZoneDatabase) do
+            local block = WorldConfig.GetBlock(zone.Name, prestige, kills, killRequirement)
+            if not block and (index <= unlockedIndex or WorldConfig.GetWorld(zone.Name) == 2) then
+                highest = zone.Name
+            end
+        end
+        return highest
+    end
+
+    ZoneSection:AddDropdown("ZeroXManualZoneTravel", {
+        Title = "Travel to Zone",
+        Description = "เลือกโซนที่ต้องการไป แล้วกดปุ่ม Travel",
+        Values = zoneNames,
+        Default = zoneNames[1],
+        Callback = function(zoneName)
+            selectedZone = zoneName
+        end,
+    })
+
+    ZoneSection:AddButton({
+        Title = "Travel to Selected Zone", Description = "กดเพื่อย้ายฐานไปโซนที่เลือก",
+        ButtonText = "Travel",
+        Callback = function()
+            if selectedZone and ZoneTravelRequestEvent then
+                pcall(function()
+                    ZoneTravelRequestEvent:FireServer(selectedZone)
+                end)
+            end
+        end,
+    })
+
+    task.spawn(function()
+        while not MacUI.Unloaded do
+            local nextName, nextCost, eligible = GetNextZoneInfo()
+            if nextName then
+                local costStr = nextCost and (nextCost > 0 and string.format(" (Cost: %d)", nextCost) or " (Free)") or ""
+                NextZoneInfoLabel:SetValue(nextName .. costStr)
+            else
+                NextZoneInfoLabel:SetValue(LocalPlayer:GetAttribute("Zone") and "Max Zone Reached" or "Waiting for zone data")
+            end
+
+            if autoBuyZone and ZonePurchaseRequestEvent and eligible and nextCost then
+                local money = GetPlayerMoney()
+                if money >= nextCost then
+                    pcall(function()
+                        ZonePurchaseRequestEvent:FireServer()
+                    end)
+                    task.wait(1)
+                end
+            end
+
+            if autoTravelHighest and ZoneTravelRequestEvent and #zoneList > 0 then
+                local currentZ = GetCurrentZoneName()
+                local ok, highestAccessible = pcall(GetHighestUnlockedZone)
+                if ok and highestAccessible and currentZ ~= highestAccessible then
+                    pcall(function()
+                        ZoneTravelRequestEvent:FireServer(highestAccessible)
+                    end)
+                end
+            end
+            task.wait(2)
+        end
+    end)
+end
+
+--------------------------------------------------------------------------------
+-- 4. SMART UNIT ROLL & TEAM PROGRESSION
+--------------------------------------------------------------------------------
+do
+    local RarityRank = {
+        ["Common"] = 1,
+        ["Uncommon"] = 2,
+        ["Rare"] = 3,
+        ["Epic"] = 4,
+        ["Legendary"] = 5,
+        ["Mythic"] = 6,
+        ["Secret"] = 7,
+        ["Cosmic"] = 8,
+        ["Divine"] = 9,
+        ["Limited"] = 10,
+        ["Exclusive"] = 11,
+    }
+
+    local RankNames = {
+        [1] = "Common",
+        [2] = "Uncommon",
+        [3] = "Rare",
+        [4] = "Epic",
+        [5] = "Legendary",
+        [6] = "Mythic",
+        [7] = "Secret",
+        [8] = "Cosmic",
+        [9] = "Divine",
+    }
+
+    local globalCurrentTargetRank = 4
+
+    local function EvaluateTeam()
+        local base = GetPlayerBase()
+        local equipped = {}
+        local totalDPS = 0
+        local minRank = 99
+        local minRarity = "Common"
+        local maxRank = 1
+        local maxRarity = "Common"
+
+        -- 1. First Priority: Check units actually placed on the player's base placement slots (active defense team)
+        if base and base:FindFirstChild("PlacementSlots") then
+            for _, slot in ipairs(base.PlacementSlots:GetChildren()) do
+                local model = slot:FindFirstChildWhichIsA("Model")
+                if model then
+                    local unitName = model:GetAttribute("UnitName") or string.gsub(model.Name, "^PlacedUnit_", "")
+                    local uData = UnitDatabase[unitName]
+                    local rarity = uData and uData.Rarity or model:GetAttribute("Rarity") or "Common"
+                    local dps = uData and (uData.DPS or uData.Damage) or 0
+                    local rank = RarityRank[rarity] or 1
+                    totalDPS = totalDPS + dps
+
+                    if rank < minRank then
+                        minRank = rank
+                        minRarity = rarity
+                    end
+                    if rank > maxRank then
+                        maxRank = rank
+                        maxRarity = rarity
+                    end
+                    table.insert(equipped, { Name = unitName, Rarity = rarity, DPS = dps, Rank = rank, Placed = true })
+                end
+            end
+        end
+
+        -- 2. Fallback to UnitInventory tools if no units are placed yet
+        if #equipped == 0 and UnitInventory and typeof(UnitInventory.getTools) == "function" then
+            local tools = UnitInventory.getTools()
+            for _, t in ipairs(tools) do
+                if t:GetAttribute("Equipped") == true then
+                    local uData = UnitDatabase[t.Name]
+                    local rarity = uData and uData.Rarity or "Common"
+                    local dps = uData and (uData.DPS or uData.Damage) or 0
+                    local rank = RarityRank[rarity] or 1
+                    totalDPS = totalDPS + dps
+
+                    if rank < minRank then
+                        minRank = rank
+                        minRarity = rarity
+                    end
+                    if rank > maxRank then
+                        maxRank = rank
+                        maxRarity = rarity
+                    end
+                    table.insert(equipped, { Name = t.Name, Rarity = rarity, DPS = dps, Rank = rank, Placed = false })
+                end
+            end
+        end
+
+        if #equipped == 0 then
+            minRank = 1
+            minRarity = "Common"
+        end
+
+        return {
+            Equipped = equipped,
+            Count = #equipped,
+            TotalDPS = totalDPS,
+            MinRank = minRank,
+            MinRarity = minRarity,
+            MaxRank = maxRank,
+            MaxRarity = maxRarity,
+        }
+    end
+
+    local SmartTeamSection = Tabs.UnitsRoll:AddSection({
+        Title = "Smart Team Progression",
+        Icon = "trending-up",
+    })
+
+    local smartTeamEnabled = false
+    local updateRollSession = function() end
+    local targetRarityMode = "Smart Adaptive (Auto Next Tier)"
+    local syncGameFilters = true
+    local autoUpgradeSlots = true
+    local autoSellJunk = false
+
+    SmartTeamSection:AddToggle("ZeroXSmartTeamProgression", {
+        Title = "Enable Smart Team Progression",
+        Description = "ระบบพัฒนาทีมด้วยการสุ่ม เก็บยูนิต ซื้อช่อง ฟิว และจัดทีม",
+        Default = false,
+        Callback = function(val)
+            smartTeamEnabled = val
+            if not val then updateRollSession() end
+        end,
+    })
+
+    SmartTeamSection:AddDropdown("ZeroXTargetRarityMode", {
+        Title = "Target Unit Tier",
+        Description = "เลือกระดับยูนิตที่ต้องการสุ่ม โหมด Smart Adaptive ปรับตามระดับสูงสุดในทีม",
+        Values = {
+            "Smart Adaptive (Auto Next Tier)",
+            "Uncommon+",
+            "Rare+",
+            "Epic+",
+            "Legendary+",
+            "Mythic+",
+            "Secret+",
+            "Cosmic+",
+        },
+        Default = "Smart Adaptive (Auto Next Tier)",
+        Callback = function(val)
+            targetRarityMode = val
+        end,
+    })
+
+    local TargetTierDisplay = SmartTeamSection:AddLabel({
+        Title = "Current Target Tier",
+        Value = "Evaluating...",
+    })
+
+    local TeamStatsDisplay = SmartTeamSection:AddLabel({
+        Title = "Team Overview",
+        Value = "Loading...",
+    })
+
+    SmartTeamSection:AddToggle("ZeroXSyncGameFilters", {
+        Title = "Auto-Configure Game Roll Filters",
+        Description = "ระบบตั้งค่าการสุ่มให้เก็บระดับเป้าหมายและระดับก่อนหน้าสำหรับฟิว",
+        Default = true,
+        Callback = function(val)
+            syncGameFilters = val
+        end,
+    })
+
+    SmartTeamSection:AddToggle("ZeroXAutoUpgradeSlots", {
+        Title = "Auto Buy Placement Slots",
+        Description = "ระบบซื้อช่องวางยูนิตเพิ่มเมื่อมีเงินพอ",
+        Default = true,
+        Callback = function(val)
+            autoUpgradeSlots = val
+        end,
+    })
+
+    SmartTeamSection:AddToggle("ZeroXAutoSellJunk", {
+        Title = "Auto Sell Below-Tier Units",
+        Description = "ระบบขายยูนิตที่ต่ำกว่าระดับที่เก็บไว้ฟิว โดยไม่ขายตัวที่วาง ล็อก หรือเป็นรายการโปรด",
+        Default = false,
+        Callback = function(val)
+            autoSellJunk = val
+        end,
+    })
+
+    --------------------------------------------------------------------------
+    -- Roll Mechanics Controls
+    --------------------------------------------------------------------------
+    local RollSection = Tabs.UnitsRoll:AddSection({
+        Title = "Roll Stations & Speed",
+        Icon = "dices",
+    })
+
+    local autoRollBuiltIn = false
+    local rollDelay = 0.25
+    local rollRunning = false
+    local lastRollStart = 0
+    local lastRollStop = 0
+    local pendingRollTarget = nil
+    local rollStartedEvent = GetRemote("AutoRollStartedEvent")
+    local rollStoppedEvent = GetRemote("AutoRollStoppedEvent")
+
+    updateRollSession = function()
+        local wanted = smartTeamEnabled or autoRollBuiltIn
+        if not wanted then
+            if rollRunning and AutoRollStopEvent then
+                AutoRollStopEvent:FireServer()
+            end
+            rollRunning = false
+        elseif not rollRunning and not pendingRollTarget and AutoRollStartEvent
+            and os.clock() - lastRollStart >= 3 and os.clock() - lastRollStop >= 2 then
+            if AutoBuyToggleEvent then AutoBuyToggleEvent:FireServer(false) end
+            lastRollStart = os.clock()
+            AutoRollStartEvent:FireServer()
+        end
+    end
+
+    if rollStartedEvent then
+        rollStartedEvent.OnClientEvent:Connect(function() rollRunning = true end)
+    end
+    if rollStoppedEvent then
+        rollStoppedEvent.OnClientEvent:Connect(function()
+            rollRunning = false
+            lastRollStop = os.clock()
+        end)
+    end
+
+    RollSection:AddToggle("ZeroXAutoRollBuiltIn", {
+        Title = "AFK Auto Roll",
+        Description = "ระบบสุ่ม AFK ของเกม เมื่อเจอเป้าหมายจะหยุดฟาร์มไปซื้อ แล้วกลับมาฟาร์มต่อ",
+        Default = false,
+        Callback = function(val)
+            autoRollBuiltIn = val
+            if not val then updateRollSession() end
+        end,
+    })
+
+    --------------------------------------------------------------------------
+    -- Unit Automation Controls
+    --------------------------------------------------------------------------
+    local UnitSection = Tabs.UnitsRoll:AddSection({
+        Title = "Unit Maintenance",
+        Icon = "users",
+    })
+
+    local autoEquipBest = true
+    local autoFuse = true
+
+    UnitSection:AddToggle("ZeroXAutoEquipBestUnits", {
+        Title = "Auto Equip Best Units",
+        Description = "ระบบจัดยูนิตที่ดีที่สุดลงสนามอัตโนมัติ",
+        Default = true,
+        Callback = function(val)
+            autoEquipBest = val
+        end,
+    })
+
+    UnitSection:AddToggle("ZeroXAutoFuse", {
+        Title = "Auto Fuse Units",
+        Description = "ระบบฟิวยูนิตซ้ำเพื่อเพิ่มดาวให้แข็งแกร่งขึ้น",
+        Default = true,
+        Callback = function(val)
+            autoFuse = val
+        end,
+    })
+
+    local serverClock = nil
+    if GeneralUseModules then
+        local clockModule = GeneralUseModules:FindFirstChild("ServerTimeSync")
+        if clockModule then
+            local ok, result = pcall(require, clockModule)
+            if ok and type(result) == "table" and type(result.Now) == "function" then serverClock = result end
+        end
+    end
+
+    local function AddFinishedProcessClaim(optionId, title, pendingName, claimName)
+        local enabled = false
+        local pendingRemote = GetRemote(pendingName)
+        local claimRemote = GetRemote(claimName)
+        UnitSection:AddToggle(optionId, {
+            Title = title,
+            Description = "ระบบรับยูนิตหรือผลลัพธ์ที่ดำเนินการเสร็จแล้ว",
+            Default = false,
+            Callback = function(value) enabled = value end,
+        })
+        task.spawn(function()
+            while not MacUI.Unloaded do
+                if enabled and serverClock and pendingRemote and claimRemote then
+                    local ok, pending = pcall(function() return pendingRemote:InvokeServer() end)
+                    if ok and type(pending) == "table" and type(pending.ReadyAt) == "number"
+                        and pending.ReadyAt <= serverClock.Now() and enabled and not MacUI.Unloaded then
+                        local claimed, result = pcall(function() return claimRemote:InvokeServer() end)
+                        if not claimed then warn("[Zero X] " .. title .. ": " .. tostring(result)) end
+                    elseif not ok then
+                        warn("[Zero X] " .. title .. " status: " .. tostring(pending))
+                    end
+                end
+                task.wait(5)
+            end
+        end)
+    end
+
+    AddFinishedProcessClaim("ZeroXClaimEvolution", "Auto Claim Evolution", "GetPendingEvolutionFunction", "ClaimEvolveRequestFunction")
+    AddFinishedProcessClaim("ZeroXClaimAtomize", "Auto Claim Atomizer", "GetPendingAtomizeFunction", "ClaimAtomizeRequestFunction")
+    AddFinishedProcessClaim("ZeroXClaimClone", "Auto Claim Clone", "GetPendingCloneFunction", "ClaimCloneRequestFunction")
+
+    UnitSection:AddButton({
+        Title = "Pick Up All Placed Units",
+        Description = "กดเพื่อเก็บยูนิตทั้งหมดจากสนามกลับเข้ากระเป๋า",
+        ButtonText = "Pick Up All",
+        Style = "Destructive",
+        Callback = function()
+            if PickUpAllRequestFunction then
+                pcall(function() PickUpAllRequestFunction:InvokeServer() end)
+                Window:Toast("Units", { Detail = "Recalled all placed units", Icon = "arrow-down-circle" })
+            end
+        end,
+    })
+
+    --------------------------------------------------------------------------
+    -- Filter Synchronization Helper
+    --------------------------------------------------------------------------
+    local lastSyncedRank = -1
+    local function SyncFilters(targetRank)
+        if not syncGameFilters or not AutoRollToggleRarityEvent or targetRank == lastSyncedRank then
+            return
+        end
+        lastSyncedRank = targetRank
+        -- Keep one tier below the target for fusion as well.
+        local keepRank = math.max(1, targetRank - 1)
+        for rarity, rank in pairs(RarityRank) do
+            -- In AutoRollToggleRarityEvent:
+            -- true = ADD to DisabledRarities (SKIP/DISABLE)
+            -- false = REMOVE from DisabledRarities (KEEP/PAUSE ON THIS RARITY)
+            local shouldDisable = (rank < keepRank)
+            pcall(function()
+                AutoRollToggleRarityEvent:FireServer(rarity, shouldDisable)
+            end)
+        end
+    end
+
+    --------------------------------------------------------------------------
+    -- AFK roll target collection
+    --------------------------------------------------------------------------
+    local function CountOwnedUnits(unitName)
+        if not UnitInventory or typeof(UnitInventory.getTools) ~= "function" then return nil end
+        local ok, items = pcall(UnitInventory.getTools)
+        if not ok or type(items) ~= "table" then return nil end
+        local count = 0
+        for _, item in ipairs(items) do
+            if item.Name == unitName then count = count + 1 end
+        end
+        return count
+    end
+
+    local function FindRollTarget(targetRank)
+        local keepRank = math.max(1, targetRank - 1)
+        local base = GetPlayerBase()
+        local station = base and base:FindFirstChild("RollStation")
+        if not station then return nil end
+        for _, model in ipairs(CollectionService:GetTagged("FloatingRollDisplay")) do
+            if model:IsA("Model") and model:IsDescendantOf(station) then
+                local name = model:GetAttribute("UnitName")
+                local definition = name and UnitDatabase[name]
+                local rarity = model:GetAttribute("Rarity") or (definition and definition.Rarity)
+                local rank = RarityRank[rarity]
+                local prompt = model:FindFirstChildWhichIsA("ProximityPrompt", true)
+                if rank and rank >= keepRank and prompt and prompt.Enabled and definition and type(definition.Price) == "number" then
+                    return { Model = model, Prompt = prompt, Name = name, Rarity = rarity, Price = definition.Price }
+                end
+            end
+        end
+    end
+
+    local function FinishRollTarget(returnToFarm)
+        local target = pendingRollTarget
+        pendingRollTarget = nil
+        if returnToFarm and target and target.ReturnCharacter == LocalPlayer.Character then
+            local root = target.ReturnCharacter:FindFirstChild("HumanoidRootPart")
+            if root and target.ReturnCFrame then root.CFrame = target.ReturnCFrame end
+        end
+        farmPausedForUnit = false
+    end
+
+    local function ProcessRollTarget(targetRank)
+        if not (smartTeamEnabled or autoRollBuiltIn) then
+            if pendingRollTarget then FinishRollTarget(true) end
+            return
+        end
+        local target = pendingRollTarget
+        if not target then
+            target = FindRollTarget(targetRank)
+            if not target then return end
+            pendingRollTarget = target
+            if AutoRollStopEvent then AutoRollStopEvent:FireServer() end
+            rollRunning = false
+        end
+        if target.Baseline then
+            local count = CountOwnedUnits(target.Name)
+            if count and count > target.Baseline then
+                TargetTierDisplay:SetValue("Purchased: " .. target.Name)
+                FinishRollTarget(true)
+                return
+            end
+        end
+        if not target.Model.Parent or not target.Prompt.Parent then
+            if target.LastAttempt and os.clock() - target.LastAttempt < 5 then
+                TargetTierDisplay:SetValue("Checking purchase: " .. target.Name)
+                return
+            end
+            TargetTierDisplay:SetValue("Purchase not confirmed: " .. target.Name)
+            FinishRollTarget(true)
+            return
+        end
+        local money = GetPlayerMoney()
+        if money < target.Price then
+            TargetTierDisplay:SetValue(string.format("Waiting for money: %s (%d / %d)", target.Name, money, target.Price))
+            farmPausedForUnit = false
+            return
+        end
+        local character = LocalPlayer.Character
+        local root = character and character:FindFirstChild("HumanoidRootPart")
+        local promptPart = target.Prompt:FindFirstAncestorWhichIsA("BasePart")
+        local ownedCount = CountOwnedUnits(target.Name)
+        if not root or not promptPart or ownedCount == nil or type(fireproximityprompt) ~= "function" then
+            TargetTierDisplay:SetValue("Waiting for character, inventory or prompt support")
+            farmPausedForUnit = false
+            return
+        end
+        farmPausedForUnit = true
+        if not target.ReturnCFrame then
+            target.ReturnCharacter = character
+            target.ReturnCFrame = root.CFrame
+        end
+        if character ~= target.ReturnCharacter then
+            target.ReturnCharacter = character
+            target.ReturnCFrame = root.CFrame
+        end
+        root.CFrame = promptPart.CFrame * CFrame.new(0, 0, 3)
+        target.Baseline = target.Baseline or ownedCount
+        local now = os.clock()
+        target.ApproachTime = target.ApproachTime or now
+        if now - target.ApproachTime < 0.5 then return end
+        if not target.LastAttempt or now - target.LastAttempt >= 2 then
+            target.LastAttempt = now
+            local ok, err = pcall(fireproximityprompt, target.Prompt)
+            if not ok then warn("[Zero X] Unit collect: " .. tostring(err)) end
+        end
+        TargetTierDisplay:SetValue("Collecting: " .. target.Name .. " (" .. target.Rarity .. ")")
+    end
+
+    MacUI:OnUnload(function()
+        farmPausedForUnit = false
+        if (smartTeamEnabled or autoRollBuiltIn) and AutoRollStopEvent then
+            pcall(function() AutoRollStopEvent:FireServer() end)
+        end
+    end)
+
+    --------------------------------------------------------------------------
+    -- Team Developer & Roll Execution Loop
+    --------------------------------------------------------------------------
+    task.spawn(function()
+        local lastFuseCheck = 0
+        local lastSlotCheck = 0
+        local lastSellCheck = 0
+        local lastEquipCheck = 0
+
+        while not MacUI.Unloaded do
+            local now = os.clock()
+            local team = EvaluateTeam()
+            local currentTargetRank = 4 -- Default to Epic+
+
+            if team then
+                if targetRarityMode == "Smart Adaptive (Auto Next Tier)" then
+                    -- If team has reached Epic/Legendary, advance Target to Mythic while keeping Legendary for fusion
+                    currentTargetRank = math.max(6, math.min(9, team.MaxRank + 1))
+                elseif targetRarityMode == "Uncommon+" then
+                    currentTargetRank = 2
+                elseif targetRarityMode == "Rare+" then
+                    currentTargetRank = 3
+                elseif targetRarityMode == "Epic+" then
+                    currentTargetRank = 4
+                elseif targetRarityMode == "Legendary+" then
+                    currentTargetRank = 5
+                elseif targetRarityMode == "Mythic+" then
+                    currentTargetRank = 6
+                elseif targetRarityMode == "Secret+" then
+                    currentTargetRank = 7
+                elseif targetRarityMode == "Cosmic+" then
+                    currentTargetRank = 8
+                end
+
+                globalCurrentTargetRank = currentTargetRank
+                local targetName = RankNames[currentTargetRank] or "Mythic"
+                local fusionName = RankNames[math.max(1, currentTargetRank - 1)] or "Common"
+                TargetTierDisplay:SetValue(string.format("Target: %s+ | Fuse: %s+ (Lowest: %s)", targetName, fusionName, team.MinRarity))
+                TeamStatsDisplay:SetValue(string.format("DPS: %d | Units: %d", math.floor(team.TotalDPS), team.Count))
+                if smartTeamEnabled or autoRollBuiltIn then SyncFilters(currentTargetRank) end
+            end
+
+            ProcessRollTarget(currentTargetRank)
+            if (smartTeamEnabled or autoRollBuiltIn) and not pendingRollTarget then updateRollSession() end
+
+            -- Auto Equip Best Units
+            if not pendingRollTarget and (smartTeamEnabled or autoEquipBest) and EquipBestRequestFunction and (now - lastEquipCheck >= 3) then
+                lastEquipCheck = now
+                pcall(function() EquipBestRequestFunction:InvokeServer() end)
+            end
+
+            -- Auto Upgrade Placement Slots (checks Money first)
+            if (smartTeamEnabled and autoUpgradeSlots) and UpgradeRequestEvent and (now - lastSlotCheck >= 4) then
+                lastSlotCheck = now
+                local slotLv = LocalPlayer:GetAttribute("PlacementSlotLv") or 0
+                local cfg = UpgradeConfig["PlacementSlotLv"]
+                local maxLv = cfg and (cfg.MaxLevel or cfg.MaxLv or 10) or 10
+                if slotLv < maxLv then
+                    local nextCost = cfg and cfg.Prices and cfg.Prices[slotLv + 1]
+                    if nextCost and GetPlayerMoney() >= nextCost then
+                        pcall(function()
+                            UpgradeRequestEvent:FireServer("PlacementSlotLv")
+                        end)
+                    end
+                end
+            end
+
+            -- Auto Fuse Duplicate Units (Smart Selective Fusion)
+            -- Condition 1: Index each unit by unique UnitId to prevent double-counting.
+            -- Condition 2: Fusing into a placed unit requires >= 1 spare unequipped copy in bag.
+            -- Condition 3: Fusing inventory units requires >= 2 unequipped copies in bag.
+            -- Condition 4: Base target must have Stars < 5.
+            -- Condition 5: Both base and sacrifice copies must share the exact same Name and Mutation.
+            if not pendingRollTarget and autoFuse and FuseRequestFunction and UnitInventory and (now - lastFuseCheck >= 4) then
+                lastFuseCheck = now
+
+                -- 1. Index all currently placed unit models on base by their unique UnitId
+                local placedModelByUid = {}
+                local base = GetPlayerBase()
+                if base and base:FindFirstChild("PlacementSlots") then
+                    for _, slot in ipairs(base.PlacementSlots:GetChildren()) do
+                        local m = slot:FindFirstChildWhichIsA("Model")
+                        local uid = m and m:GetAttribute("UnitId")
+                        if uid then
+                            placedModelByUid[uid] = m
+                        end
+                    end
+                end
+
+                -- 2. Group all distinct units owned by player (UnitInventory.getTools() contains all owned units)
+                local tools = UnitInventory.getTools()
+                local groups = {}
+                local seenUids = {}
+
+                for _, t in ipairs(tools) do
+                    local uid = t:GetAttribute("UnitId")
+                    if uid and not seenUids[uid] then
+                        seenUids[uid] = true
+
+                        local uName = t.Name
+                        local mut = t:GetAttribute("Mutation") or "None"
+                        local stars = t:GetAttribute("Stars") or 0
+                        local key = uName .. "|" .. tostring(mut)
+
+                        if not groups[key] then
+                            groups[key] = {
+                                Name = uName,
+                                Mutation = mut,
+                                Placed = {},
+                                Unequipped = {},
+                                Total = 0,
+                            }
+                        end
+
+                        groups[key].Total = groups[key].Total + 1
+
+                        local isPlaced = (placedModelByUid[uid] ~= nil)
+                        local placedModel = placedModelByUid[uid]
+
+                        local entry = {
+                            UnitId = uid,
+                            Tool = t,
+                            Stars = stars,
+                            IsPlaced = isPlaced,
+                            Model = placedModel,
+                            -- If placed on base, pass the placed Model (as FusionUIController does), else the unique UnitId
+                            Arg = placedModel or uid,
+                        }
+
+                        if isPlaced then
+                            table.insert(groups[key].Placed, entry)
+                        else
+                            table.insert(groups[key].Unequipped, entry)
+                        end
+                    end
+                end
+
+                -- 3. Execute Fuse ONLY when true duplicates exist AND sacrifice material is available in bag
+                for _, g in pairs(groups) do
+                    -- Never attempt fuse if total copies < 2 or if there are 0 unequipped copies in bag to sacrifice
+                    if g.Total >= 2 and #g.Unequipped >= 1 then
+                        local target = nil
+
+                        -- Option A: If a placed copy on the base has Stars < 5, prioritize fusing into it!
+                        -- Because #g.Unequipped >= 1, we have spare bag copies to sacrifice into this placed defender.
+                        for _, p in ipairs(g.Placed) do
+                            if p.Stars < 5 then
+                                if not target or p.Stars > target.Stars then
+                                    target = p
+                                end
+                            end
+                        end
+
+                        -- Option B: If no placed copy needs stars, fuse inventory units.
+                        -- Requires at least 2 unequipped copies (1 base + at least 1 sacrifice).
+                        if not target and #g.Unequipped >= 2 then
+                            for _, inv in ipairs(g.Unequipped) do
+                                if inv.Stars < 5 then
+                                    if not target or inv.Stars > target.Stars then
+                                        target = inv
+                                    end
+                                end
+                            end
+                        end
+
+                        if target and target.Arg then
+                            local ok, fused = pcall(function()
+                                return FuseRequestFunction:InvokeServer(target.Arg, 1, false, "Max")
+                            end)
+                            if ok and fused then
+                                -- Pause briefly to allow inventory synchronization before next fusion
+                                break
+                            end
+                        end
+                    end
+                end
+            end
+
+            -- Auto Sell Units Below Keep Tier (keeps inventory clean)
+            -- Progressively sells units strictly below keepRank (e.g. Target Mythic (6) -> keepRank Legendary (5) -> sells Epic & below)
+            if not pendingRollTarget and autoSellJunk and SellUnitsRequestFunction and UnitInventory and (now - lastSellCheck >= 3) then
+                lastSellCheck = now
+
+                -- Gather placed unit IDs so we never sell any unit actively placed on the base
+                local placedUnitIds = {}
+                local base = GetPlayerBase()
+                if base and base:FindFirstChild("PlacementSlots") then
+                    for _, slot in ipairs(base.PlacementSlots:GetChildren()) do
+                        local m = slot:FindFirstChildWhichIsA("Model")
+                        local uid = m and m:GetAttribute("UnitId")
+                        if uid then placedUnitIds[uid] = true end
+                    end
+                end
+
+                local curRankTarget = currentTargetRank or globalCurrentTargetRank or 6
+                -- Keep target tier AND fusion tier (keepRank = curRankTarget - 1)
+                -- Sell units strictly below keepRank
+                local keepRank = math.max(1, curRankTarget - 1)
+
+                local tools = UnitInventory.getTools()
+                local toSell = {}
+                for _, t in ipairs(tools) do
+                    local uid = t:GetAttribute("UnitId") or UnitInventory.remoteArg(t)
+                    if uid and not placedUnitIds[uid] then
+                        if t:GetAttribute("Locked") ~= true and t:GetAttribute("Favorite") ~= true then
+                            local uData = UnitDatabase[t.Name]
+                            local rarity = (uData and uData.Rarity) or t:GetAttribute("Rarity") or "Common"
+                            local rank = RarityRank[rarity] or 1
+                            if rank < keepRank then
+                                table.insert(toSell, uid)
+                                if #toSell >= 20 then break end
+                            end
+                        end
+                    end
+                end
+                if #toSell > 0 then
+                    pcall(function()
+                        SellUnitsRequestFunction:InvokeServer(toSell)
+                    end)
+                end
+            end
+
+            task.wait(rollDelay)
+        end
+    end)
+end
+
+--------------------------------------------------------------------------------
+-- ACTIVITIES AND CRAFTING
+--------------------------------------------------------------------------------
+do
+    local challenges = SafeRequire("ChallengeDatabase")
+    local raids = SafeRequire("RaidDatabase")
+    local crafting = SafeRequire("CraftingDatabase")
+    local clockModule = GeneralUseModules and GeneralUseModules:FindFirstChild("ServerTimeSync")
+    local clockOK, serverClock = pcall(function() return clockModule and require(clockModule) end)
+    if not clockOK then serverClock = nil end
+
+    local function ServerNow()
+        if serverClock and type(serverClock.Now) == "function" then return serverClock.Now() end
+    end
+
+    local activity = Tabs.Activities:AddSection({ Title = "Tower & Challenge", Icon = "swords" })
+    local challengeNames = { "None" }
+    if challenges and type(challenges.TierOrder) == "table" then
+        for _, tier in ipairs(challenges.TierOrder) do table.insert(challengeNames, tier) end
+    end
+    local selectedChallenge = "None"
+    local autoChallenge = false
+    local challengeStatus = activity:AddLabel({ Title = "Challenge Status", Value = "Disabled" })
+    activity:AddDropdown("ZeroXChallengeTier", {
+        Title = "Challenge Tier", Description = "เลือกระดับ Challenge ที่ต้องการเล่น", Values = challengeNames, Default = "None",
+        Callback = function(value) selectedChallenge = value end,
+    })
+    activity:AddToggle("ZeroXAutoChallenge", {
+        Title = "Auto Start Challenge", Default = false,
+        Description = "ระบบเริ่ม Challenge ที่เลือกเมื่อหมดเวลาคูลดาวน์",
+        Callback = function(value) autoChallenge = value end,
+    })
+
+    activity:AddButton({
+        Title = "Enter Infinite Tower", Description = "กดเพื่อเข้า Infinite Tower", ButtonText = "Enter",
+        Callback = function()
+            local remote = GetRemote("InfiniteTowerEnterRequestFunction")
+            if not remote then return end
+            task.spawn(function()
+                local ok, accepted, reason = pcall(function() return remote:InvokeServer() end)
+                Window:Toast("Infinite Tower", { Detail = ok and (accepted and "Entry accepted" or tostring(reason or "Entry declined")) or tostring(accepted), Icon = "map" })
+            end)
+        end,
+    })
+    activity:AddToggle("ZeroXAutoEnterTower", {
+        Title = "Auto Enter Tower", Default = false,
+        Description = "ระบบเข้า Tower และเปิดให้เกมเริ่มรอบใหม่อัตโนมัติ",
+        Callback = function(value)
+            if not value then
+                if ClientSettings and ClientSettings.Set then ClientSettings.Set("TowerAutoRestartEnabled", false) end
+                return
+            end
+            if ClientSettings and ClientSettings.Set then ClientSettings.Set("TowerAutoRestartEnabled", true) end
+            local remote = GetRemote("InfiniteTowerEnterRequestFunction")
+            if remote then task.spawn(function()
+                local ok, accepted, reason = pcall(function() return remote:InvokeServer() end)
+                Window:Toast("Infinite Tower", { Detail = ok and (accepted and "Entry accepted" or tostring(reason or "Entry declined")) or tostring(accepted), Icon = "map" })
+            end) end
+        end,
+    })
+    activity:AddToggle("ZeroXTowerAutoRestart", {
+        Title = "Tower Auto Restart", Default = ClientSettings and ClientSettings.Get and ClientSettings.Get("TowerAutoRestartEnabled") == true,
+        Description = "ระบบเริ่ม Tower รอบใหม่อัตโนมัติตามการตั้งค่าของเกม",
+        Callback = function(value)
+            if ClientSettings and type(ClientSettings.Set) == "function" then ClientSettings.Set("TowerAutoRestartEnabled", value) end
+        end,
+    })
+    activity:AddToggle("ZeroXRaidAutoReplay", {
+        Title = "Raid Auto Replay", Default = ClientSettings and ClientSettings.Get and ClientSettings.Get("RaidAutoReplay") == true,
+        Description = "ระบบเล่น Raid ซ้ำอัตโนมัติตามการตั้งค่าของเกม",
+        Callback = function(value)
+            if ClientSettings and type(ClientSettings.Set) == "function" then ClientSettings.Set("RaidAutoReplay", value) end
+        end,
+    })
+
+    local function ChallengeReady(tier)
+        local definition = challenges and challenges[tier]
+        local now = ServerNow()
+        if not definition or not now then return false end
+        local completed = LocalPlayer:GetAttribute("Challenge" .. tier .. "CompletedAt") or 0
+        if definition.CompletionCooldownSeconds then
+            return completed <= 0 or completed + definition.CompletionCooldownSeconds <= now
+        end
+        local interval, offset = definition.ResetInterval, challenges.EpochOffsetSeconds
+        if type(interval) ~= "number" or interval <= 0 or type(offset) ~= "number" then return false end
+        return math.floor((completed - offset) / interval) < math.floor((now - offset) / interval)
+    end
+
+    task.spawn(function()
+        while not MacUI.Unloaded do
+            if autoChallenge then
+                local base = GetPlayerBase()
+                local remote = GetRemote("ChallengeStartRequestFunction")
+                if selectedChallenge == "None" then
+                    challengeStatus:SetValue("Select a tier")
+                elseif base and (base:GetAttribute("ChallengeActive") or base:GetAttribute("ChallengePendingTier")) then
+                    challengeStatus:SetValue("Challenge active")
+                elseif remote and ChallengeReady(selectedChallenge) then
+                    local ok, accepted, reason = pcall(function() return remote:InvokeServer(selectedChallenge) end)
+                    challengeStatus:SetValue(ok and (accepted and "Start accepted" or tostring(reason or "Start declined")) or "Request failed")
+                else
+                    challengeStatus:SetValue("Waiting for cooldown or game data")
+                end
+            end
+            task.wait(15)
+        end
+    end)
+
+    local raidSection = Tabs.Activities:AddSection({ Title = "Raid Queue", Icon = "users" })
+    local raidOptions = { "None" }
+    local raidChoices = {}
+    if raids and type(raids.Order) == "table" and type(raids.Get) == "function" then
+        for _, raidName in ipairs(raids.Order) do
+            local config = raids.Get(raidName)
+            if config and not config.ComingSoon and not config.NoQueue then
+                for _, difficulty in ipairs(config.DifficultyOrder or {}) do
+                    local label = raidName .. " / " .. difficulty
+                    raidChoices[label] = { raidName, difficulty }
+                    table.insert(raidOptions, label)
+                end
+            end
+        end
+    end
+    local raidChoice = "None"
+    local raidEnabled = false
+    local raidQueue = nil
+    local raidStatus = raidSection:AddLabel({ Title = "Queue Status", Value = "Disabled" })
+    local raidEvent = GetRemote("RaidQueueEvent")
+    local raidRemote = GetRemote("RaidPartyRequestFunction")
+    local raidConnection = raidEvent and raidEvent.OnClientEvent:Connect(function(value)
+        if type(value) == "table" then raidQueue = value end
+    end)
+    raidSection:AddDropdown("ZeroXRaidSelection", {
+        Title = "Raid & Difficulty", Description = "เลือก Raid และระดับความยากที่ต้องการเข้าคิว", Values = raidOptions, Default = "None",
+        Callback = function(value) raidChoice = value end,
+    })
+    raidSection:AddToggle("ZeroXAutoRaidQueue", {
+        Title = "Auto Raid Queue", Default = false,
+        Description = "ระบบเข้าคิว Raid ที่เลือกและรอเกมจับคู่ผู้เล่น",
+        Callback = function(value)
+            raidEnabled = value
+            if not value and raidRemote and raidQueue and raidQueue.Queued and not raidQueue.Matched then
+                task.spawn(function() pcall(function() raidRemote:InvokeServer("LeaveQueue") end) end)
+            end
+        end,
+    })
+    task.spawn(function()
+        if raidRemote then pcall(function() raidRemote:InvokeServer("GetQueue") end) end
+        while not MacUI.Unloaded do
+            if raidEnabled and raidRemote then
+                local choice = raidChoices[raidChoice]
+                if not choice then raidStatus:SetValue("Select a raid")
+                elseif not raidQueue then raidStatus:SetValue("Waiting for queue state")
+                elseif raidQueue.Matched then raidStatus:SetValue("Matched")
+                elseif raidQueue.Queued then raidStatus:SetValue("Queued")
+                else
+                    local ok, accepted, reason = pcall(function() return raidRemote:InvokeServer("Queue", choice[1], choice[2]) end)
+                    raidStatus:SetValue(ok and (accepted and "Queue requested" or tostring(reason or "Queue declined")) or "Queue request failed")
+                end
+            end
+            task.wait(15)
+        end
+    end)
+    MacUI:OnUnload(function() if raidConnection then raidConnection:Disconnect() end end)
+
+    local market = Tabs.Activities:AddSection({ Title = "Traveling Merchant", Icon = "shopping-cart" })
+    local autoMerchant = false
+    local marketStatus = market:AddLabel({ Title = "Merchant Status", Value = "Disabled" })
+    market:AddToggle("ZeroXAutoMerchant", {
+        Title = "Auto Buy Merchant Stock", Default = false,
+        Description = "ระบบซื้อของจากพ่อค้าเดินทางเมื่อร้านเปิดและมีเงินพอ",
+        Callback = function(value) autoMerchant = value end,
+    })
+    task.spawn(function()
+        while not MacUI.Unloaded do
+            if autoMerchant then
+                local stockRemote = GetRemote("GetMerchantStockRequestFunction")
+                local purchaseRemote = GetRemote("PurchaseMerchantItemRequestFunction")
+                if stockRemote and purchaseRemote then
+                    local ok, open, stock = pcall(function() return stockRemote:InvokeServer() end)
+                    if ok and open and type(stock) == "table" then
+                        marketStatus:SetValue("Merchant open")
+                        for _, item in ipairs(stock) do
+                            if not autoMerchant or MacUI.Unloaded then break end
+                            if type(item.ItemName) == "string" and type(item.Price) == "number"
+                                and type(item.Quantity) == "number" and item.Quantity > 0 and GetPlayerMoney() >= item.Price then
+                                local sent, accepted = pcall(function() return purchaseRemote:InvokeServer(item.ItemName) end)
+                                if not sent then warn("[Zero X] Merchant: " .. tostring(accepted)) end
+                                break
+                            end
+                        end
+                    else marketStatus:SetValue("Merchant closed or unavailable") end
+                else marketStatus:SetValue("Merchant remotes unavailable") end
+            end
+            task.wait(10)
+        end
+    end)
+
+    local craftSection = Tabs.Activities:AddSection({ Title = "Crafting", Icon = "hammer" })
+    local recipes = { "None" }
+    local recipeMap = {}
+    if crafting and type(crafting.Recipes) == "table" then
+        for _, recipe in ipairs(crafting.Recipes) do
+            if type(recipe.Accessory) == "string" and type(recipe.Materials) == "table" then
+                recipeMap[recipe.Accessory] = recipe
+                table.insert(recipes, recipe.Accessory)
+            end
+        end
+    end
+    local selectedRecipe = "None"
+    local autoCraft = false
+    local craftStatus = craftSection:AddLabel({ Title = "Craft Status", Value = "Disabled" })
+    craftSection:AddDropdown("ZeroXCraftRecipe", {
+        Title = "Accessory Recipe", Description = "เลือกเครื่องประดับที่ต้องการคราฟต์", Values = recipes, Default = "None",
+        Callback = function(value) selectedRecipe = value end,
+    })
+    craftSection:AddToggle("ZeroXAutoCraft", {
+        Title = "Auto Craft Selected Accessory", Default = false,
+        Description = "ระบบคราฟต์เครื่องประดับที่เลือกเมื่อมีวัตถุดิบครบ",
+        Callback = function(value) autoCraft = value end,
+    })
+    task.spawn(function()
+        while not MacUI.Unloaded do
+            if autoCraft then
+                local recipe = recipeMap[selectedRecipe]
+                local inventoryRemote = GetRemote("GetItemInventoryFunction")
+                local craftRemote = GetRemote("CraftRequestFunction")
+                if recipe and inventoryRemote and craftRemote then
+                    local ok, inventory = pcall(function() return inventoryRemote:InvokeServer() end)
+                    if ok and type(inventory) == "table" then
+                        local ready = true
+                        for _, material in ipairs(recipe.Materials) do
+                            if type(material.Item) ~= "string" or type(material.Amount) ~= "number" or (inventory[material.Item] or 0) < material.Amount then ready = false break end
+                        end
+                        if ready and autoCraft and selectedRecipe == recipe.Accessory then
+                            local sent, accepted, reason = pcall(function() return craftRemote:InvokeServer(recipe.Accessory) end)
+                            craftStatus:SetValue(sent and (accepted and "Craft accepted" or tostring(reason or "Craft declined")) or "Craft request failed")
+                        else craftStatus:SetValue("Waiting for materials") end
+                    else craftStatus:SetValue("Inventory unavailable") end
+                else craftStatus:SetValue("Select a recipe") end
+            end
+            task.wait(10)
+        end
+    end)
+
+    local unitActions = Tabs.Activities:AddSection({ Title = "Selected Unit Actions", Icon = "users" })
+    local selectedUnitId = nil
+    local selectedTrait = "None"
+    local unitLabels = { ["None"] = false }
+    local autoTrait = false
+    local traitDb = SafeRequire("TraitDatabase") or {}
+    local traitOptions = { "None" }
+    for name, definition in pairs(traitDb) do
+        if type(name) == "string" and type(definition) == "table" then table.insert(traitOptions, name) end
+    end
+    table.sort(traitOptions, function(a, b) if a == "None" then return b ~= "None" elseif b == "None" then return false else return a < b end end)
+    local unitStatus = unitActions:AddLabel({ Title = "Unit Status", Value = "Select a unit" })
+    local unitDropdown = unitActions:AddDropdown("ZeroXActionUnit", {
+        Title = "Unit", Description = "เลือกยูนิตที่ต้องการใช้ โดยดู Unit ID เพื่อแยกตัวซ้ำ", Values = { "None" }, Default = "None",
+        Callback = function(value) selectedUnitId = unitLabels[value] or nil end,
+    })
+    unitActions:AddDropdown("ZeroXActionTrait", {
+        Title = "Target Trait", Description = "เลือก Trait ที่ต้องการให้ยูนิตที่เลือก", Values = traitOptions, Default = "None",
+        Callback = function(value) selectedTrait = value end,
+    })
+    local function RefreshActionUnits()
+        if not UnitInventory or type(UnitInventory.getTools) ~= "function" then return end
+        local ok, units = pcall(UnitInventory.getTools)
+        if not ok or type(units) ~= "table" then return end
+        local labels = { "None" }
+        local mapping = { ["None"] = false }
+        for _, unit in ipairs(units) do
+            local id = unit:GetAttribute("UnitId")
+            if type(id) == "string" then
+                local label = unit.Name .. " | " .. id
+                mapping[label] = id
+                table.insert(labels, label)
+            end
+        end
+        table.sort(labels)
+        unitLabels = mapping
+        unitDropdown:SetValues(labels)
+    end
+    unitActions:AddButton({ Title = "Refresh Unit List", Description = "กดเพื่ออัปเดตรายชื่อยูนิตในกระเป๋า", ButtonText = "Refresh", Callback = RefreshActionUnits })
+    RefreshActionUnits()
+
+    local traitToggle
+    traitToggle = unitActions:AddToggle("ZeroXAutoTrait", {
+        Title = "Auto Reroll Selected Trait", Default = false,
+        Description = "ระบบใช้ Trait Shard สุ่ม Trait ให้ยูนิตที่เลือกจนได้เป้าหมาย",
+        Callback = function(value) autoTrait = value end,
+    })
+    task.spawn(function()
+        while not MacUI.Unloaded do
+            if autoTrait then
+                local unitId = selectedUnitId
+                local targetTrait = selectedTrait
+                local unit = selectedUnitId and UnitInventory and UnitInventory.findById and UnitInventory.findById(selectedUnitId)
+                local reroll = GetRemote("RerollTraitRequestFunction")
+                if not unit or selectedTrait == "None" then
+                    unitStatus:SetValue("Select a unit and target trait")
+                elseif unit:GetAttribute("Trait") == selectedTrait then
+                    unitStatus:SetValue("Target trait reached: " .. selectedTrait)
+                    if traitToggle then traitToggle:SetValue(false) end
+                elseif reroll and GetRemote("GetItemInventoryFunction") then
+                    local ok, inventory = pcall(function() return GetRemote("GetItemInventoryFunction"):InvokeServer() end)
+                    local shards = LocalPlayer:GetAttribute("TraitShardCount") or (ok and type(inventory) == "table" and inventory["Trait Shard"]) or 0
+                    if shards > 0 and autoTrait and selectedUnitId == unitId and selectedTrait == targetTrait
+                        and UnitInventory.findById(unitId) == unit then
+                        local sent, accepted, reason = pcall(function() return reroll:InvokeServer(UnitInventory.remoteArg(unit)) end)
+                        unitStatus:SetValue(sent and (accepted and "Reroll accepted" or tostring(reason or "Reroll declined")) or "Reroll request failed")
+                        if sent and accepted and reason == targetTrait and traitToggle then
+                            traitToggle:SetValue(false)
+                            unitStatus:SetValue("Target trait reached: " .. targetTrait)
+                        end
+                    else unitStatus:SetValue("Waiting for Trait Shards") end
+                end
+            end
+            task.wait(3)
+        end
+    end)
+
+    unitActions:AddButton({
+        Title = "Evolve Selected Unit", ButtonText = "Start",
+        Description = "กดเพื่อเริ่มวิวัฒนาการยูนิตที่เลือก โดยใช้ตัวซ้ำและวัตถุดิบ",
+        Callback = function()
+            local id = selectedUnitId
+            local unit = id and UnitInventory and UnitInventory.findById and UnitInventory.findById(id)
+            local definitions = SafeRequire("EvolutionDatabase")
+            local definition = unit and definitions and definitions[unit.Name]
+            local pending = GetRemote("GetPendingEvolutionFunction")
+            local inventoryRemote = GetRemote("GetItemInventoryFunction")
+            local start = GetRemote("EvolveRequestFunction")
+            if not definition or not pending or not inventoryRemote or not start then unitStatus:SetValue("Select an evolvable unit") return end
+            task.spawn(function()
+                local ok, active = pcall(function() return pending:InvokeServer() end)
+                if not ok or active then unitStatus:SetValue("Evolution busy or unavailable") return end
+                local inventoryOk, inventory = pcall(function() return inventoryRemote:InvokeServer() end)
+                if not inventoryOk or type(inventory) ~= "table" then unitStatus:SetValue("Inventory unavailable") return end
+                for item, amount in pairs(definition.RequiredItems or {}) do
+                    if (inventory[item] or 0) < amount then unitStatus:SetValue("Missing: " .. item) return end
+                end
+                if next(definition.RequiredAccessories or {}) then unitStatus:SetValue("Use game UI for accessory requirements") return end
+                local copies = 0
+                for _, other in ipairs(UnitInventory.getTools()) do if other.Name == unit.Name then copies = copies + 1 end end
+                if copies < (definition.RequiredCopies or 1) then unitStatus:SetValue("Not enough unit copies") return end
+                if selectedUnitId ~= id or UnitInventory.findById(id) ~= unit then return end
+                local sent, accepted, reason = pcall(function() return start:InvokeServer(UnitInventory.remoteArg(unit), definition.EvolvesInto) end)
+                unitStatus:SetValue(sent and (accepted and "Evolution started" or tostring(reason or "Evolution declined")) or "Evolution request failed")
+            end)
+        end,
+    })
+    unitActions:AddButton({
+        Title = "Atomize Selected Unit", ButtonText = "Start",
+        Description = "กดเพื่อใช้ยูนิตที่เลือกเริ่ม Atomizer",
+        Callback = function()
+            local id = selectedUnitId
+            local unit = id and UnitInventory and UnitInventory.findById and UnitInventory.findById(id)
+            local pending = GetRemote("GetPendingAtomizeFunction")
+            local start = GetRemote("AtomizeRequestFunction")
+            if not unit or not pending or not start then unitStatus:SetValue("Select an available unit") return end
+            task.spawn(function()
+                local ok, active = pcall(function() return pending:InvokeServer() end)
+                if not ok or active then unitStatus:SetValue("Atomizer busy or unavailable") return end
+                if selectedUnitId ~= id or UnitInventory.findById(id) ~= unit then return end
+                local sent, accepted, reason = pcall(function() return start:InvokeServer(UnitInventory.remoteArg(unit)) end)
+                unitStatus:SetValue(sent and (accepted and "Atomizer started" or tostring(reason or "Atomizer declined")) or "Atomizer request failed")
+            end)
+        end,
+    })
+end
+
+--------------------------------------------------------------------------------
+-- 5. REWARDS AUTOMATION
+--------------------------------------------------------------------------------
+do
+    local RewardsSection = Tabs.Rewards:AddSection({
+        Title = "Reward Automations",
+        Icon = "gift",
+    })
+
+    local autoDaily = false
+    local autoBattlepass = false
+    local autoOffline = false
+    local autoGroupReward = false
+    local autoEventQuests = false
+    local questSnapshot = GetRemote("GetEventQuestSnapshotFunction")
+    local questClaim = GetRemote("ClaimEventQuestRequestFunction")
+
+    RewardsSection:AddToggle("ZeroXAutoEventQuests", {
+        Title = "Auto Claim Event Quests",
+        Description = "ระบบรับรางวัลเควสปกติ รายวัน และอีเวนต์ที่ทำสำเร็จ",
+        Default = false,
+        Callback = function(value) autoEventQuests = value end,
+    })
+
+    RewardsSection:AddToggle("ZeroXAutoGroupReward", {
+        Title = "Auto Claim Group Reward", Default = false,
+        Description = "ระบบตรวจสอบและรับรางวัลกลุ่มเมื่อยังไม่ได้รับ",
+        Callback = function(value) autoGroupReward = value end,
+    })
+    task.spawn(function()
+        while not MacUI.Unloaded do
+            if autoGroupReward then
+                local statusRemote = GetRemote("GetGroupRewardStatusFunction")
+                local claimRemote = GetRemote("ClaimGroupRewardFunction")
+                if statusRemote and claimRemote then
+                    local ok, claimed = pcall(function() return statusRemote:InvokeServer() end)
+                    if ok and claimed == false and autoGroupReward then
+                        local sent, result = pcall(function() return claimRemote:InvokeServer() end)
+                        if not sent then warn("[Zero X] Group reward: " .. tostring(result)) end
+                    end
+                end
+            end
+            task.wait(60)
+        end
+    end)
+
+    task.spawn(function()
+        while not MacUI.Unloaded do
+            if autoEventQuests and questSnapshot and questClaim then
+                local ok, quests = pcall(function() return questSnapshot:InvokeServer() end)
+                if ok and type(quests) == "table" then
+                    for _, quest in ipairs(quests) do
+                        if not autoEventQuests or MacUI.Unloaded then break end
+                        if type(quest) == "table" and type(quest.Id) == "string"
+                            and not quest.Claimed and type(quest.Progress) == "number"
+                            and type(quest.Target) == "number" and quest.Progress >= quest.Target then
+                            local claimed, result = pcall(function() return questClaim:InvokeServer(quest.Id) end)
+                            if not claimed then warn("[Zero X] Event quest " .. quest.Id .. ": " .. tostring(result)) end
+                        end
+                    end
+                elseif not ok then
+                    warn("[Zero X] Event quest snapshot: " .. tostring(quests))
+                end
+            end
+            task.wait(15)
+        end
+    end)
+
+    RewardsSection:AddButton({
+        Title = "Claim Tower Bracket Rewards", Description = "กดเพื่อรับรางวัลอันดับ Tower ที่พร้อมรับ",
+        ButtonText = "Claim",
+        Callback = function()
+            local claim = GetRemote("ClaimTowerBracketRewardsFunction")
+            if not claim then return end
+            task.spawn(function()
+                local ok, result = pcall(function() return claim:InvokeServer() end)
+                Window:Toast("Tower rewards", { Detail = ok and (result and "Claim accepted" or "No claim confirmed") or "Claim request failed", Icon = "gift" })
+            end)
+        end,
+    })
+
+    RewardsSection:AddToggle("ZeroXAutoDaily", {
+        Title = "Auto Claim Daily Rewards",
+        Description = "ระบบรับรางวัลล็อกอินรายวันเมื่อพร้อมรับ",
+        Default = true,
+        Callback = function(val)
+            autoDaily = val
+        end,
+    })
+
+    RewardsSection:AddToggle("ZeroXAutoBattlepass", {
+        Title = "Auto Claim Battlepass",
+        Description = "ระบบรับรางวัล Battlepass ที่ปลดล็อกแล้ว",
+        Default = true,
+        Callback = function(val)
+            autoBattlepass = val
+        end,
+    })
+
+    RewardsSection:AddToggle("ZeroXAutoOffline", {
+        Title = "Auto Claim Offline Rewards",
+        Description = "ระบบรับรางวัลออฟไลน์ และรับสองเท่าเมื่อมี Game Pass",
+        Default = true,
+        Callback = function(val)
+            autoOffline = val
+        end,
+    })
+
+    task.spawn(function()
+        while not MacUI.Unloaded do
+            if autoDaily and GetDailyRewardStatusFunction and ClaimDailyRewardFunction then
+                pcall(function()
+                    local st = GetDailyRewardStatusFunction:InvokeServer()
+                    if st and st.CanClaim and st.NextDay then
+                        ClaimDailyRewardFunction:InvokeServer(st.NextDay)
+                    end
+                end)
+            end
+            if autoBattlepass and BattlepassFunction then
+                pcall(function()
+                    BattlepassFunction:InvokeServer("ClaimAll")
+                end)
+            end
+            if autoOffline then
+                if LocalPlayer:GetAttribute("OwnsX2OfflineRewardsGamepass") == true and ClaimDoubleOfflineRewardEvent then
+                    pcall(function() ClaimDoubleOfflineRewardEvent:FireServer() end)
+                elseif ClaimOfflineRewardEvent then
+                    pcall(function() ClaimOfflineRewardEvent:FireServer() end)
+                end
+            end
+            task.wait(15)
+        end
+    end)
+end
+
+--------------------------------------------------------------------------------
+-- 6. VISUALS & ESP
+--------------------------------------------------------------------------------
+do
+    local VisualsSection = Tabs.Visuals:AddSection({
+        Title = "Enemy & Boss ESP",
+        Icon = "eye",
+    })
+
+    local espEnabled = false
+    local bossHighlightOnly = false
+    local espHighlights = {}
+
+    local function ClearESP()
+        for model, hl in pairs(espHighlights) do
+            if hl then hl:Destroy() end
+        end
+        table.clear(espHighlights)
+    end
+
+    VisualsSection:AddToggle("ZeroXEnemyESP", {
+        Title = "Enable Enemy ESP",
+        Description = "ระบบแสดงตำแหน่งและเลือดของศัตรู",
+        Default = false,
+        Callback = function(val)
+            espEnabled = val
+            if not val then ClearESP() end
+        end,
+    })
+
+    VisualsSection:AddToggle("ZeroXBossESPOnly", {
+        Title = "Boss Only ESP",
+        Description = "แสดงตำแหน่งและเลือดเฉพาะบอส",
+        Default = false,
+        Callback = function(val)
+            bossHighlightOnly = val
+            ClearESP()
+        end,
+    })
+
+    task.spawn(function()
+        while not MacUI.Unloaded do
+            if espEnabled then
+                local base = GetPlayerBase()
+                if base then
+                    local eh = base:FindFirstChild("EnemiesHolder")
+                    local bh = base:FindFirstChild("BossHolder")
+
+                    local activeModels = {}
+
+                    local function ProcessList(folder, isBoss)
+                        if not folder then return end
+                        for _, model in ipairs(folder:GetChildren()) do
+                            local hum = model:FindFirstChildOfClass("Humanoid")
+                            if hum and hum.Health > 0 then
+                                activeModels[model] = true
+                                if not bossHighlightOnly or isBoss then
+                                    if not espHighlights[model] then
+                                        local hl = Instance.new("Highlight")
+                                        hl.Name = "ZeroX_ESP"
+                                        hl.Adornee = model
+                                        hl.FillColor = isBoss and Color3.fromRGB(255, 60, 60) or Color3.fromRGB(80, 160, 255)
+                                        hl.FillTransparency = 0.4
+                                        hl.OutlineColor = isBoss and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(150, 210, 255)
+                                        hl.OutlineTransparency = 0
+                                        hl.Parent = model
+                                        espHighlights[model] = hl
+                                    end
+                                end
+                            end
+                        end
+                    end
+
+                    ProcessList(bh, true)
+                    ProcessList(eh, false)
+
+                    for m, hl in pairs(espHighlights) do
+                        if not activeModels[m] or not m.Parent then
+                            hl:Destroy()
+                            espHighlights[m] = nil
+                        end
+                    end
+                end
+            end
+            task.wait(1)
+        end
+    end)
+
+    MacUI:OnUnload(ClearESP)
+end
+
+--------------------------------------------------------------------------------
+-- 7. PLAYER UTILITIES
+--------------------------------------------------------------------------------
+do
+    local state = {
+        WalkSpeed = false,
+        Speed = 32,
+        InfiniteJump = false,
+        Noclip = false,
+        InstantPrompt = false,
+        Fly = false,
+        FlySpeed = 60,
+        FPSBoost = false,
+        UltraFPSBoost = false,
+        DisableAnimations = false,
+        Reconnect = false,
+    }
+
+    local alive = true
+    local connections = {}
+    local motionConnection, flight, watchedAnimator, animationConnection
+    local reconnecting, reconnectToken, renderDisabled = false, 0, false
+    local performanceVersion = 0
+
+    local function WeakKeys() return setmetatable({}, { __mode = "k" }) end
+    local speedSaved = WeakKeys()
+    local collisionSaved = WeakKeys()
+    local promptSaved = WeakKeys()
+    local animationSaved = WeakKeys()
+    local performanceSaved = WeakKeys()
+
+    local function Connect(signal, callback)
+        local conn = signal:Connect(callback)
+        table.insert(connections, conn)
+        return conn
+    end
+
+    local function Patch(bag, object, property, value)
+        if not object then return end
+        local ok, current = pcall(function() return object[property] end)
+        if not ok then return end
+        local properties = bag[object]
+        local record = properties and properties[property]
+        if current == value then
+            if record then record.Applied = value end
+            return
+        end
+        local written = pcall(function() object[property] = value end)
+        if not written then return end
+        if not properties then
+            properties = {}
+            bag[object] = properties
+        end
+        if not record then
+            record = { Original = current }
+            properties[property] = record
+        end
+        record.Applied = value
+    end
+
+    local function Restore(bag)
+        for object, properties in pairs(bag) do
+            for property, record in pairs(properties) do
+                pcall(function()
+                    if object[property] == record.Applied then
+                        object[property] = record.Original
+                    end
+                end)
+            end
+            bag[object] = nil
+        end
+    end
+
+    local function GetCharacter()
+        local character = LocalPlayer.Character
+        local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+        local root = humanoid and humanoid.RootPart
+        return character, humanoid, root
+    end
+
+    local function StopFlight()
+        if not flight then return end
+        local old = flight
+        flight = nil
+        pcall(function()
+            old.Velocity:Destroy()
+            old.Orientation:Destroy()
+            old.Attachment:Destroy()
+            if old.Humanoid.AutoRotate == false then
+                old.Humanoid.AutoRotate = old.AutoRotate
+            end
+        end)
+    end
+
+    local function StartFlight(humanoid, root)
+        StopFlight()
+        local attachment = Instance.new("Attachment")
+        attachment.Name = "ZeroXFlightAttachment"
+        attachment.Parent = root
+
+        local velocity = Instance.new("LinearVelocity")
+        velocity.Name = "ZeroXFlightVelocity"
+        velocity.Attachment0 = attachment
+        velocity.RelativeTo = Enum.ActuatorRelativeTo.World
+        velocity.VelocityConstraintMode = Enum.VelocityConstraintMode.Vector
+        velocity.ForceLimitsEnabled = false
+        velocity.VectorVelocity = Vector3.zero
+        velocity.Parent = root
+
+        local orientation = Instance.new("AlignOrientation")
+        orientation.Name = "ZeroXFlightOrientation"
+        orientation.Mode = Enum.OrientationAlignmentMode.OneAttachment
+        orientation.Attachment0 = attachment
+        orientation.MaxTorque = math.huge
+        orientation.Responsiveness = 20
+        orientation.CFrame = root.CFrame.Rotation
+        orientation.Parent = root
+
+        flight = {
+            Root = root,
+            Humanoid = humanoid,
+            AutoRotate = humanoid.AutoRotate,
+            Attachment = attachment,
+            Velocity = velocity,
+            Orientation = orientation,
+        }
+        humanoid.AutoRotate = false
+    end
+
+    local function FreezeTrack(track)
+        if not alive or not state.DisableAnimations then return end
+        pcall(function()
+            if animationSaved[track] == nil then animationSaved[track] = track.Speed end
+            track:AdjustSpeed(0)
+        end)
+    end
+
+    local function ClearAnimations()
+        if animationConnection then
+            animationConnection:Disconnect()
+            animationConnection = nil
+        end
+        watchedAnimator = nil
+        for track, speed in pairs(animationSaved) do
+            pcall(function()
+                if track.IsPlaying and track.Speed == 0 then
+                    track:AdjustSpeed(speed)
+                end
+            end)
+            animationSaved[track] = nil
+        end
+    end
+
+    local function UpdateAnimator(humanoid)
+        local animator = humanoid and humanoid:FindFirstChildOfClass("Animator")
+        if animator == watchedAnimator then return end
+        ClearAnimations()
+        watchedAnimator = animator
+        if animator then
+            animationConnection = animator.AnimationPlayed:Connect(FreezeTrack)
+            for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
+                FreezeTrack(track)
+            end
+        end
+    end
+
+    local function UpdateMotion()
+        local needed = state.WalkSpeed or state.Noclip or state.Fly or state.DisableAnimations
+        if not state.WalkSpeed then Restore(speedSaved) end
+        if not state.Noclip then Restore(collisionSaved) end
+        if not state.Fly then StopFlight() end
+        if not state.DisableAnimations then ClearAnimations() end
+
+        if not needed then
+            if motionConnection then
+                motionConnection:Disconnect()
+                motionConnection = nil
+            end
+            return
+        end
+
+        if motionConnection then return end
+
+        motionConnection = RunService.PreSimulation:Connect(function()
+            if not alive then return end
+            local character, humanoid, root = GetCharacter()
+            if state.DisableAnimations then UpdateAnimator(humanoid) end
+            if not humanoid or humanoid.Health <= 0 then
+                StopFlight()
+                return
+            end
+            if state.WalkSpeed then
+                Patch(speedSaved, humanoid, "WalkSpeed", state.Speed)
+            end
+            if state.Noclip and character then
+                for _, object in ipairs(character:GetDescendants()) do
+                    if object:IsA("BasePart") then
+                        Patch(collisionSaved, object, "CanCollide", false)
+                    end
+                end
+            end
+            if not state.Fly then return end
+            if not root or not root.Parent or root.Anchored then
+                StopFlight()
+                return
+            end
+            if not flight or flight.Root ~= root or not flight.Velocity.Parent or not flight.Orientation.Parent then
+                StartFlight(humanoid, root)
+            end
+
+            local camera = workspace.CurrentCamera
+            local direction = Vector3.zero
+            if camera and not UserInputService:GetFocusedTextBox() then
+                local cf = camera.CFrame
+                if UserInputService:IsKeyDown(Enum.KeyCode.W) then direction = direction + cf.LookVector end
+                if UserInputService:IsKeyDown(Enum.KeyCode.S) then direction = direction - cf.LookVector end
+                if UserInputService:IsKeyDown(Enum.KeyCode.D) then direction = direction + cf.RightVector end
+                if UserInputService:IsKeyDown(Enum.KeyCode.A) then direction = direction - cf.RightVector end
+                if UserInputService:IsKeyDown(Enum.KeyCode.Space) then direction = direction + Vector3.yAxis end
+                if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then direction = direction - Vector3.yAxis end
+                flight.Orientation.CFrame = cf.Rotation
+            end
+            if direction.Magnitude > 1 then direction = direction.Unit end
+            flight.Velocity.VectorVelocity = direction * state.FlySpeed
+        end)
+    end
+
+    Connect(LocalPlayer.CharacterRemoving, function()
+        StopFlight()
+        ClearAnimations()
+        Restore(speedSaved)
+        Restore(collisionSaved)
+    end)
+
+    Connect(UserInputService.JumpRequest, function()
+        if not alive or not state.InfiniteJump or state.Fly or UserInputService:GetFocusedTextBox() then return end
+        local _, humanoid = GetCharacter()
+        if humanoid and humanoid.Health > 0 then
+            humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+        end
+    end)
+
+    Connect(PromptService.PromptShown, function(prompt)
+        if alive and state.InstantPrompt then Patch(promptSaved, prompt, "HoldDuration", 0) end
+    end)
+
+    local function ApplyPrompts()
+        if not state.InstantPrompt then
+            Restore(promptSaved)
+            return
+        end
+        for _, object in ipairs(workspace:GetDescendants()) do
+            if object:IsA("ProximityPrompt") then
+                Patch(promptSaved, object, "HoldDuration", 0)
+            end
+        end
+    end
+
+    local function ApplyPerformanceObject(object)
+        if not (state.FPSBoost or state.UltraFPSBoost) then return end
+        if object:IsA("BasePart") then
+            Patch(performanceSaved, object, "CastShadow", false)
+            if state.UltraFPSBoost then
+                Patch(performanceSaved, object, "Material", Enum.Material.SmoothPlastic)
+                Patch(performanceSaved, object, "Reflectance", 0)
+                if object:IsA("MeshPart") then
+                    Patch(performanceSaved, object, "TextureID", "")
+                end
+            end
+        elseif object:IsA("Light") or object:IsA("PostEffect") then
+            Patch(performanceSaved, object, "Enabled", false)
+        elseif state.UltraFPSBoost then
+            if object:IsA("Decal") or object:IsA("Texture") then
+                Patch(performanceSaved, object, "Transparency", 1)
+            elseif object:IsA("SpecialMesh") then
+                Patch(performanceSaved, object, "TextureId", "")
+            end
+        end
+    end
+
+    local function ApplyPerformance()
+        performanceVersion = performanceVersion + 1
+        local version = performanceVersion
+        Restore(performanceSaved)
+        if not (state.FPSBoost or state.UltraFPSBoost) then return end
+        Patch(performanceSaved, Lighting, "GlobalShadows", false)
+        task.spawn(function()
+            for _, parent in ipairs({ workspace, Lighting }) do
+                for index, object in ipairs(parent:GetDescendants()) do
+                    if not alive or version ~= performanceVersion then return end
+                    ApplyPerformanceObject(object)
+                    if index % 300 == 0 then task.wait() end
+                end
+            end
+        end)
+    end
+
+    Connect(workspace.DescendantAdded, function(object)
+        if not alive then return end
+        ApplyPerformanceObject(object)
+        if state.InstantPrompt and object:IsA("ProximityPrompt") then
+            Patch(promptSaved, object, "HoldDuration", 0)
+        end
+    end)
+
+    --------------------------------------------------------------------------
+    -- Player UI Controls
+    --------------------------------------------------------------------------
+    local Movement = Tabs.Player:AddSection({ Title = "Movement", Icon = "move" })
+    local Performance = Tabs.Player:AddSection({ Title = "Performance", Icon = "monitor" })
+    local FlySection = Tabs.Player:AddSection({ Title = "Fly", Icon = "send" })
+    local Session = Tabs.Player:AddSection({ Title = "Session", Icon = "refresh-cw" })
+
+    local function AddStateToggle(section, index, title, key, changed)
+        local descriptions = { WalkSpeed = "ระบบปรับความเร็วเดินตามค่าที่เลือก", InfiniteJump = "ระบบกระโดดได้ต่อเนื่องกลางอากาศ", Noclip = "ระบบเดินทะลุสิ่งกีดขวาง", InstantPrompt = "ระบบกดจุดโต้ตอบโดยไม่ต้องรอเวลากดค้าง", FPSBoost = "ระบบลดเอฟเฟกต์เพื่อช่วยเพิ่ม FPS", UltraFPSBoost = "ระบบลดรายละเอียดเพิ่มเติมเพื่อเพิ่ม FPS", DisableAnimations = "ระบบปิดแอนิเมชันของตัวละคร", Fly = "ระบบบินด้วยปุ่มควบคุมการเคลื่อนที่" }
+        return section:AddToggle(index, {
+            Title = title,
+            Description = descriptions[key],
+            Default = false,
+            Callback = function(value)
+                if not alive then return end
+                state[key] = value
+                if changed then changed() end
+            end,
+        })
+    end
+
+    AddStateToggle(Movement, "ZeroXWalkSpeed", "WalkSpeed", "WalkSpeed", UpdateMotion)
+    Movement:AddSlider("ZeroXSpeed", {
+        Title = "Speed", Description = "ปรับความเร็วเดินที่ใช้เมื่อเปิด WalkSpeed",
+        Min = 0,
+        Max = 200,
+        Default = 32,
+        Increment = 1,
+        Callback = function(value) state.Speed = value end,
+    })
+    AddStateToggle(Movement, "ZeroXInfiniteJump", "Infinite Jump", "InfiniteJump")
+    AddStateToggle(Movement, "ZeroXNoclip", "Noclip", "Noclip", UpdateMotion)
+    AddStateToggle(Movement, "ZeroXInstantPrompt", "Instant ProximityPrompt", "InstantPrompt", ApplyPrompts)
+
+    Performance:AddToggle("ZeroXDisable3D", {
+        Title = "Disable 3D Rendering", Description = "ปิดภาพสามมิติเพื่อลดภาระเครื่อง",
+        Default = false,
+        Callback = function(value)
+            if not alive then return end
+            pcall(function() RunService:Set3dRenderingEnabled(not value) end)
+        end,
+    })
+    AddStateToggle(Performance, "ZeroXFPSBoost", "FPS Boost", "FPSBoost", ApplyPerformance)
+    AddStateToggle(Performance, "ZeroXUltraFPSBoost", "Ultra FPS Boost", "UltraFPSBoost", ApplyPerformance)
+    AddStateToggle(Performance, "ZeroXDisableAnimations", "Disable Player Animations", "DisableAnimations", UpdateMotion)
+
+    AddStateToggle(FlySection, "ZeroXFly", "Fly", "Fly", UpdateMotion)
+    FlySection:AddSlider("ZeroXFlySpeed", {
+        Title = "Fly Speed", Description = "ปรับความเร็วในการบิน",
+        Min = 1,
+        Max = 200,
+        Default = 60,
+        Increment = 1,
+        Callback = function(value) state.FlySpeed = value end,
+    })
+
+    Session:AddToggle("ZeroXReconnect", {
+        Title = "Auto Reconnect on Kick", Description = "ระบบเข้าเกมใหม่เมื่อถูกตัดการเชื่อมต่อ",
+        Default = false,
+        Callback = function(value)
+            state.Reconnect = value
+        end,
+    })
+
+    Session:AddToggle("ZeroXHideOnStart", {
+        Title = "Hide UI On Start",
+        Description = "ซ่อนหน้าต่างเมื่อรันครั้งต่อไปและเปิด Autoload",
+        Default = false,
+    })
+
+    MacUI:OnUnload(function()
+        alive = false
+        performanceVersion = performanceVersion + 1
+        if motionConnection then
+            motionConnection:Disconnect()
+            motionConnection = nil
+        end
+        for _, conn in ipairs(connections) do
+            conn:Disconnect()
+        end
+        table.clear(connections)
+        StopFlight()
+        ClearAnimations()
+        Restore(speedSaved)
+        Restore(collisionSaved)
+        Restore(promptSaved)
+        Restore(performanceSaved)
+    end)
+end
+
+--------------------------------------------------------------------------------
+-- ZERO X: Local Overhead Name
+--------------------------------------------------------------------------------
+do
+    local TARGET_NAME = "ZERO X SCRIPTHUB"
+    local alive = true
+    local character
+    local playerConnections = {}
+    local characterConnections = {}
+    local labels = {}
+
+    local function DisconnectAll(list)
+        for _, c in ipairs(list) do c:Disconnect() end
+        table.clear(list)
+    end
+
+    local function EscapeRichText(value)
+        return (value:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;"))
+    end
+
+    local function NameTexts()
+        local tag = LocalPlayer:GetAttribute("GuildTag")
+        if type(tag) ~= "string" or tag == "" then
+            return TARGET_NAME, EscapeRichText(TARGET_NAME)
+        end
+        local color = LocalPlayer:GetAttribute("GuildColor")
+        local hex = typeof(color) == "Color3" and color:ToHex() or "8D89ED"
+        return "[" .. tag .. "] " .. TARGET_NAME,
+            '<font color="#' .. hex .. '">[' .. EscapeRichText(tag) .. ']</font> ' .. EscapeRichText(TARGET_NAME)
+    end
+
+    local function ReleaseLabel(label, record)
+        record.Connection:Disconnect()
+        pcall(function()
+            if label.Text == record.Expected then label.Text = record.Original end
+        end)
+        labels[label] = nil
+    end
+
+    local function Refresh()
+        local overhead = character and character:FindFirstChild("OverHead")
+        if overhead and not overhead:IsA("BillboardGui") then overhead = nil end
+        local main = overhead and overhead:FindFirstChild("Main")
+        local display = main and main:FindFirstChild("DisplayName")
+        local shadow = display and display:FindFirstChild("TxtShadow")
+        local front = shadow and shadow:FindFirstChild("Txt")
+        local plainText, richText = NameTexts()
+        local wanted = {}
+
+        if shadow and shadow:IsA("TextLabel") then wanted[shadow] = plainText end
+        if front and front:IsA("TextLabel") then wanted[front] = front.RichText and richText or plainText end
+
+        for label, record in pairs(labels) do
+            if wanted[label] == nil then ReleaseLabel(label, record) end
+        end
+
+        for label, text in pairs(wanted) do
+            local record = labels[label]
+            if not record then
+                record = { Original = label.Text }
+                labels[label] = record
+                record.Connection = label:GetPropertyChangedSignal("Text"):Connect(function()
+                    if not alive or labels[label] ~= record then return end
+                    if label.Text ~= record.Expected then
+                        record.Original = label.Text
+                        Refresh()
+                    end
+                end)
+            end
+            record.Expected = text
+            if label.Text ~= text then label.Text = text end
+        end
+    end
+
+    local function BindCharacter(nextCharacter)
+        DisconnectAll(characterConnections)
+        character = nextCharacter
+        if character then
+            table.insert(characterConnections, character.DescendantAdded:Connect(Refresh))
+            table.insert(characterConnections, character.DescendantRemoving:Connect(Refresh))
+        end
+        Refresh()
+    end
+
+    table.insert(playerConnections, LocalPlayer.CharacterAdded:Connect(BindCharacter))
+    table.insert(playerConnections, LocalPlayer.CharacterRemoving:Connect(function(oldChar)
+        if character == oldChar then BindCharacter(nil) end
+    end))
+
+    MacUI:OnUnload(function()
+        alive = false
+        DisconnectAll(playerConnections)
+        DisconnectAll(characterConnections)
+        for label, record in pairs(labels) do ReleaseLabel(label, record) end
+    end)
+
+    BindCharacter(LocalPlayer.Character)
+end
+
+--------------------------------------------------------------------------------
+-- Managers & Config
+--------------------------------------------------------------------------------
+ThemeManager:SetLibrary(MacUI)
+ThemeManager:SetFolder("ZeroX")
+ThemeManager:LoadCustomThemes()
+
+InterfaceManager:SetLibrary(MacUI)
+InterfaceManager:SetFolder("ZeroX")
+InterfaceManager:BuildInterfaceSection(Tabs.Appearance)
+
+SaveManager:SetLibrary(MacUI)
+SaveManager:SetFolder("ZeroX/" .. tostring(game.PlaceId))
+SaveManager:IgnoreThemeSettings()
+SaveManager:BuildConfigSection(Tabs.Profiles)
+
+--------------------------------------------------------------------------------
+-- Auto Execute on Teleport
+--------------------------------------------------------------------------------
+do
+    local LOADER_URL = "https://raw.githubusercontent.com/MomoHub007/ZeroX-Best-Script/refs/heads/main/loader.lua"
+    local env = type(getgenv) == "function" and getgenv() or _G
+    local queueFn = env.queue_on_teleport or env.queueonteleport
+    local flagFile = "ZeroX/AutoExecute/" .. tostring(game.GameId) .. ".txt"
+
+    local section = Tabs.Profiles:AddSection({
+        Title = "Auto Execute",
+        Icon = "play",
+    })
+
+    local status = section:AddLabel({
+        Title = "Status",
+        Value = "Disabled",
+    })
+
+    local function WriteFlag(enabled)
+        if type(env.makefolder) ~= "function" or type(env.writefile) ~= "function" or type(env.isfolder) ~= "function" then
+            return false
+        end
+        return pcall(function()
+            if not env.isfolder("ZeroX") then env.makefolder("ZeroX") end
+            if not env.isfolder("ZeroX/AutoExecute") then env.makefolder("ZeroX/AutoExecute") end
+            env.writefile(flagFile, enabled and "1" or "0")
+        end)
+    end
+
+    local initialEnabled = false
+    if type(env.isfile) == "function" and type(env.readfile) == "function" then
+        pcall(function()
+            initialEnabled = env.isfile(flagFile) and env.readfile(flagFile) == "1"
+        end)
+    end
+
+    local queued = false
+    local function QueueLoader()
+        if queued then return true end
+        if type(queueFn) ~= "function" then return false end
+        local payload = string.format([[
+            local env = type(getgenv) == "function" and getgenv() or _G
+            if type(env.isfile) == "function" and type(env.readfile) == "function"
+                and env.isfile(%q) and env.readfile(%q) == "1" then
+                loadstring(game:HttpGet(%q))()
+            end
+        ]], flagFile, flagFile, LOADER_URL)
+        local ok = pcall(queueFn, payload)
+        queued = ok
+        return ok
+    end
+
+    local toggle = section:AddToggle("ZeroXAutoExecute", {
+        Title = "Auto Execute",
+        Description = "ระบบรันสคริปต์ใหม่หลังเทเลพอร์ตหรือย้ายเซิร์ฟเวอร์",
+        Default = initialEnabled,
+        Callback = function(enabled)
+            local saved = WriteFlag(enabled)
+            if enabled then
+                status:SetValue(saved and QueueLoader() and "Enabled" or "Unavailable: executor support required")
+            else
+                status:SetValue(saved and "Disabled" or "Could not save setting")
+            end
+        end,
+    })
+
+    if initialEnabled then
+        status:SetValue(QueueLoader() and "Enabled" or "Unavailable: teleport queue missing")
+    end
+end
+
+SaveManager:LoadAutoloadConfig()
+
+if Options.ZeroXHideOnStart and Options.ZeroXHideOnStart.Value then
+    Window:Minimize()
+end
