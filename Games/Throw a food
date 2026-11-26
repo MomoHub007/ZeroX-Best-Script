@@ -1,0 +1,3961 @@
+--[[
+    Zero X — reusable UI base
+    Based on the supplied MacUI demo (MacUI by Kiwzu).
+    Original Dark / Blue appearance retained; demo pages and tasks removed.
+    Run in the same client environment as the original HttpGet/loadstring script.
+]]
+
+local BASE = (getgenv and getgenv().MacUIBase) or "https://raw.githubusercontent.com/Kiwzu/Mac-OS-UI-LUA/refs/heads/main/"
+
+local MacUI = loadstring(game:HttpGet(BASE .. "MacUIFramework.lua"))()
+local SaveManager = loadstring(game:HttpGet(BASE .. "SaveManager.lua"))()
+local InterfaceManager = loadstring(game:HttpGet(BASE .. "InterfaceManager.lua"))()
+local ThemeManager = loadstring(game:HttpGet(BASE .. "ThemeManager.lua"))()
+
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+if not LocalPlayer then
+    warn("[Zero X] This UI must run on the client.")
+    return
+end
+local Options = MacUI.Options
+
+--------------------------------------------------------------------------------
+-- Original theme definitions retained unchanged.
+--------------------------------------------------------------------------------
+
+local rgb = Color3.fromRGB
+MacUI:AddTheme("Ocean", {
+	Background = rgb(14, 26, 40),
+	Sidebar = rgb(19, 34, 52),
+	SidebarDivider = rgb(8, 16, 26),
+	Group = rgb(22, 39, 58),
+	GroupStroke = rgb(34, 56, 80),
+	Separator = rgb(36, 58, 82),
+	SubText = rgb(150, 172, 196),
+	Tertiary = rgb(96, 120, 146),
+	Control = rgb(44, 70, 98),
+	ControlHover = rgb(54, 84, 116),
+	ControlStroke = rgb(58, 88, 120),
+	Button = rgb(40, 66, 94),
+	ButtonHover = rgb(50, 80, 112),
+	Field = rgb(12, 22, 34),
+	FieldStroke = rgb(40, 64, 90),
+	Search = rgb(28, 48, 70),
+	SwitchOff = rgb(44, 70, 98),
+	Track = rgb(40, 64, 90),
+	SegmentBg = rgb(30, 52, 76),
+	SegmentSelected = rgb(64, 98, 134),
+	Menu = rgb(22, 39, 58),
+	MenuStroke = rgb(48, 76, 106),
+	Code = rgb(10, 19, 30),
+}, "Dark")
+
+MacUI:AddTheme("Rose", {
+	Background = rgb(252, 245, 247),
+	Sidebar = rgb(246, 231, 236),
+	Group = rgb(255, 255, 255),
+	Search = rgb(238, 222, 228),
+	SegmentBg = rgb(240, 225, 231),
+}, "Light")
+
+--------------------------------------------------------------------------------
+-- Window: original theme, accent, layout and sizing retained.
+--------------------------------------------------------------------------------
+
+local Window = MacUI:CreateWindow({
+	Title = "Zero X",
+	SubTitle = "",
+	Icon = "command", -- Lucide icon name, rbxassetid:// or a number
+	IconColor = "Blue", -- tile colour for that icon (dock, dialogs)
+	Size = UDim2.fromOffset(820, 600),
+	MinSize = Vector2.new(620, 420),
+	TabWidth = 214, -- sidebar width
+	Theme = "Dark", -- "Dark" | "Light" | "Midnight" | "Ocean" | "Rose"
+	Accent = "Blue", -- accent name, hex string or Color3
+	SidebarStyle = "Tile", -- "Tile" | "Tinted" | "Plain"
+	Profile = { Title = "ZERO X SCRIPTHUB", Subtitle = "ZERO X SCRIPTHUB" }, -- fixed display name in UI
+	MinimizeKey = Enum.KeyCode.RightControl,
+	Acrylic = false, -- frosted-glass sidebar (graphics quality 8+)
+	KeybindList = false, -- floating list of keybinds and shortcuts
+	Search = true, -- toolbar search field
+	SearchPlaceholder = "Search",
+	Spotlight = true, -- Ctrl/Cmd + K command palette
+	SpotlightKey = Enum.KeyCode.K,
+	Resizable = true,
+	ConfirmClose = true, -- the red button asks before unloading
+	ReplaceExisting = true, -- running the script again replaces this window
+	ShowDock = false, -- dock icon while minimised
+	Loading = false,
+	Undo = true, -- Ctrl + Z / Ctrl + Shift + Z for changes you make
+	PerformanceGuard = true, -- pause blur and animations if the game slows down
+})
+
+--------------------------------------------------------------------------------
+-- ZERO X: macOS-style logo / draggable / visible while UI is hidden
+--------------------------------------------------------------------------------
+
+do
+	local screenGui = Window.ScreenGui
+
+	if screenGui and screenGui:IsA("ScreenGui") then
+		local UserInputService = game:GetService("UserInputService")
+		local TweenService = game:GetService("TweenService")
+
+		-- ปรับค่าเองตรงนี้
+		local LOGO_IMAGE = "rbxassetid://138334792995002"
+		local ICON_SIZE = 64
+		local TOP_OFFSET = 12
+		local DRAG_THRESHOLD = 6
+		local EDGE_MARGIN = 8
+
+		local connections = {}
+
+		local function Connect(signal, callback)
+			local connection = signal:Connect(callback)
+			table.insert(connections, connection)
+			return connection
+		end
+
+		-- ตัวครอบ: รวมไอคอนและชื่อไว้ด้วยกัน
+		local holder = Instance.new("Frame")
+		holder.Name = "ZeroXLogoHolder"
+		holder.Size = UDim2.fromOffset(ICON_SIZE + 12, ICON_SIZE + 28)
+		holder.Position = UDim2.new(
+			0.5,
+			-(ICON_SIZE + 12) / 2,
+			0,
+			TOP_OFFSET
+		)
+		holder.BackgroundTransparency = 1
+		holder.Visible = Window.Shown == false
+		holder.ZIndex = 50
+		holder.Parent = screenGui
+
+		-- เงาแบบซ้อนชั้น ใช้เฉพาะ Frame ไม่โหลดรูปเพิ่ม
+		local shadow = Instance.new("Frame")
+		shadow.Name = "Shadow"
+		shadow.Position = UDim2.fromOffset(4, 5)
+		shadow.Size = UDim2.fromOffset(ICON_SIZE + 4, ICON_SIZE + 4)
+		shadow.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+		shadow.BackgroundTransparency = 0.65
+		shadow.BorderSizePixel = 0
+		shadow.ZIndex = 50
+		shadow.Parent = holder
+
+		local shadowCorner = Instance.new("UICorner")
+		shadowCorner.CornerRadius = UDim.new(0, 20)
+		shadowCorner.Parent = shadow
+
+		-- พื้นผิวไอคอน
+		local logoButton = Instance.new("ImageButton")
+		logoButton.Name = "ZeroXLogoButton"
+		logoButton.Position = UDim2.fromOffset(6, 0)
+		logoButton.Size = UDim2.fromOffset(ICON_SIZE, ICON_SIZE)
+		logoButton.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+		logoButton.BorderSizePixel = 0
+		logoButton.Image = ""
+		logoButton.AutoButtonColor = false
+		logoButton.Active = true
+		logoButton.ZIndex = 51
+		logoButton.Parent = holder
+
+
+		-- Keep the input target fixed; animate only its visual surface.
+		logoButton.BackgroundTransparency = 1
+		local visual = Instance.new("Frame")
+		visual.Name = "LogoSurface"
+		visual.AnchorPoint = Vector2.new(0.5, 0.5)
+		visual.Position = UDim2.fromScale(0.5, 0.5)
+		visual.Size = UDim2.fromScale(1, 1)
+		visual.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+		visual.BorderSizePixel = 0
+		visual.ZIndex = 51
+		visual.Parent = logoButton
+
+		local visualScale = Instance.new("UIScale")
+		visualScale.Parent = visual
+
+		local corner = Instance.new("UICorner")
+		corner.CornerRadius = UDim.new(0, 18)
+		corner.Parent = visual
+
+		local surface = Instance.new("UIGradient")
+		surface.Rotation = 90
+		surface.Color = ColorSequence.new(Color3.fromRGB(255, 255, 255))
+		surface.Parent = visual
+
+		local border = Instance.new("UIStroke")
+		border.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+		border.Color = Color3.fromRGB(190, 190, 195)
+		border.Transparency = 0.65
+		border.Thickness = 1
+		border.Parent = visual
+
+		-- แยกรูปจากพื้นหลัง เพื่อไม่ให้ Gradient เปลี่ยนสีโลโก้
+		local logoImage = Instance.new("ImageLabel")
+		logoImage.Name = "Logo"
+		logoImage.AnchorPoint = Vector2.new(0.5, 0.5)
+		logoImage.Position = UDim2.fromScale(0.5, 0.5)
+		logoImage.Size = UDim2.fromOffset(ICON_SIZE - 12, ICON_SIZE - 12)
+		logoImage.BackgroundTransparency = 1
+		logoImage.Image = LOGO_IMAGE
+		logoImage.ScaleType = Enum.ScaleType.Fit
+		logoImage.ZIndex = 52
+		logoImage.Parent = visual
+
+		local sheen = Instance.new("Frame")
+		sheen.Name = "HoverSheen"
+		sheen.Size = UDim2.fromScale(1, 1)
+		sheen.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+		sheen.BorderSizePixel = 0
+		sheen.ZIndex = 53
+		sheen.Parent = visual
+		local sheenCorner = Instance.new("UICorner")
+		sheenCorner.CornerRadius = UDim.new(0, 18)
+		sheenCorner.Parent = sheen
+		local sheenGradient = Instance.new("UIGradient")
+		sheenGradient.Rotation = 25
+		sheenGradient.Transparency = NumberSequence.new({
+			NumberSequenceKeypoint.new(0, 1),
+			NumberSequenceKeypoint.new(0.35, 1),
+			NumberSequenceKeypoint.new(0.5, 0.35),
+			NumberSequenceKeypoint.new(0.65, 1),
+			NumberSequenceKeypoint.new(1, 1),
+		})
+		sheenGradient.Offset = Vector2.new(-1.5, 0)
+		sheenGradient.Parent = sheen
+
+		-- One tween per target; rapid hover changes cancel the previous tween.
+		local effectTweens = {}
+		local hovered = false
+		local function Animate(target, properties, instant, duration)
+			if effectTweens[target] then
+				effectTweens[target]:Cancel()
+				effectTweens[target] = nil
+			end
+			if instant then
+				for key, value in pairs(properties) do
+					target[key] = value
+				end
+				return
+			end
+			local tween = TweenService:Create(target,
+				TweenInfo.new(duration or 0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+				properties)
+			effectTweens[target] = tween
+			tween:Play()
+		end
+
+		local function SetEffect(pressed, instant)
+			local highlighted = hovered or pressed
+			Animate(visualScale, { Scale = pressed and 0.96 or (hovered and 1.08 or 1) }, instant)
+			Animate(visual, {
+				Position = UDim2.new(0.5, 0, 0.5, pressed and 0 or (hovered and -3 or 0)),
+			}, instant)
+			Animate(border, {
+				Color = highlighted and Color3.fromRGB(95, 175, 255) or Color3.fromRGB(190, 190, 195),
+				Transparency = highlighted and 0.12 or 0.65,
+				Thickness = highlighted and 1.8 or 1,
+			}, instant)
+			Animate(shadow, {
+				BackgroundTransparency = highlighted and 0.5 or 0.65,
+				Position = UDim2.fromOffset(4, hovered and 8 or 5),
+			}, instant)
+		end
+
+		local function ResetEffects()
+			hovered = false
+			SetEffect(false, true)
+			Animate(sheenGradient, { Offset = Vector2.new(-1.5, 0) }, true)
+		end
+
+
+		-- ลากโดยใช้ระยะจากจุดกดเริ่มต้น
+		local activeInput
+		local startPointer
+		local startPosition
+		local moved = false
+
+		local function SetPositionClamped(position)
+			local bounds = screenGui.AbsoluteSize
+			local size = holder.AbsoluteSize
+
+			local marginX = math.min(
+				EDGE_MARGIN,
+				math.max(0, (bounds.X - size.X) / 2)
+			)
+			local marginY = math.min(
+				EDGE_MARGIN,
+				math.max(0, (bounds.Y - size.Y) / 2)
+			)
+
+			local x = math.clamp(
+				position.X,
+				marginX,
+				math.max(marginX, bounds.X - size.X - marginX)
+			)
+			local y = math.clamp(
+				position.Y,
+				marginY,
+				math.max(marginY, bounds.Y - size.Y - marginY)
+			)
+
+			holder.Position = UDim2.fromOffset(x, y)
+		end
+
+		local function GetLocalPosition()
+			local bounds = screenGui.AbsoluteSize
+			local position = holder.Position
+
+			return Vector2.new(
+				position.X.Scale * bounds.X + position.X.Offset,
+				position.Y.Scale * bounds.Y + position.Y.Offset
+			)
+		end
+
+		local function ResetDrag()
+			activeInput = nil
+			startPointer = nil
+			startPosition = nil
+			moved = false
+			SetEffect(false)
+		end
+
+		Connect(logoButton.MouseEnter, function()
+			if MacUI.Unloaded or not holder.Visible then return end
+			hovered = true
+			SetEffect(activeInput ~= nil)
+			if not activeInput then
+				Animate(sheenGradient, { Offset = Vector2.new(-1.5, 0) }, true)
+				Animate(sheenGradient, { Offset = Vector2.new(1.5, 0) }, false, 0.65)
+			end
+		end)
+
+		Connect(logoButton.MouseLeave, function()
+			hovered = false
+			SetEffect(activeInput ~= nil)
+		end)
+
+		Connect(logoButton.InputBegan, function(input)
+			if activeInput or MacUI.Unloaded or not holder.Visible then
+				return
+			end
+
+			local inputType = input.UserInputType
+
+			if inputType ~= Enum.UserInputType.MouseButton1
+				and inputType ~= Enum.UserInputType.Touch then
+				return
+			end
+
+			activeInput = input
+			startPointer = Vector2.new(input.Position.X, input.Position.Y)
+			startPosition = GetLocalPosition()
+			moved = false
+			SetEffect(true)
+		end)
+
+		Connect(UserInputService.InputChanged, function(input)
+			if not activeInput or not holder.Visible then
+				return
+			end
+
+			local isTouch = activeInput.UserInputType
+				== Enum.UserInputType.Touch
+
+			if isTouch then
+				if input ~= activeInput then
+					return
+				end
+			elseif input.UserInputType
+				~= Enum.UserInputType.MouseMovement then
+				return
+			end
+
+			local pointer = Vector2.new(input.Position.X, input.Position.Y)
+			local delta = pointer - startPointer
+
+			if delta.Magnitude >= DRAG_THRESHOLD then
+				moved = true
+			end
+
+			if moved then
+				SetPositionClamped(startPosition + delta)
+			end
+		end)
+
+		Connect(UserInputService.InputEnded, function(input)
+			if not activeInput or input ~= activeInput then
+				return
+			end
+
+			local shouldOpen = not moved and holder.Visible
+				and input.UserInputState ~= Enum.UserInputState.Cancel
+
+			ResetDrag()
+
+			if shouldOpen and not MacUI.Unloaded and not Window.Loading then
+				Window:Restore()
+			end
+		end)
+
+		Connect(UserInputService.WindowFocusReleased, function()
+			ResetDrag()
+			ResetEffects()
+		end)
+
+		Connect(screenGui:GetPropertyChangedSignal("AbsoluteSize"), function()
+			ResetDrag()
+			ResetEffects()
+			SetPositionClamped(GetLocalPosition())
+		end)
+
+		-- ซิงก์กับการเปิด / ซ่อน UI ทั้งปุ่มย่อและปุ่มลัด
+		local originalSetVisible = Window.SetVisible
+
+		local function SetVisibleWithLogo(self, visible, instant)
+			originalSetVisible(self, visible, instant)
+
+			if holder.Parent then
+				ResetDrag()
+				ResetEffects()
+				holder.Visible = self.Shown == false
+			end
+		end
+
+		Window.SetVisible = SetVisibleWithLogo
+
+		MacUI:OnUnload(function()
+			for _, connection in ipairs(connections) do
+				connection:Disconnect()
+			end
+			table.clear(connections)
+
+			if Window.SetVisible == SetVisibleWithLogo then
+				Window.SetVisible = originalSetVisible
+			end
+
+			for target, tween in pairs(effectTweens) do
+				tween:Cancel()
+				effectTweens[target] = nil
+			end
+			holder:Destroy()
+		end)
+	else
+		warn("[Zero X] Cannot create logo: Window.ScreenGui unavailable")
+	end
+end
+
+-- Pages (จัดกลุ่มด้วย Section: แท็บที่อยู่หมวดเดียวกันต้องเรียงติดกัน)
+local Tabs = {
+    -- หน้าหลัก: ภาพรวมบัญชีและทางลัด
+    Home = Window:AddTab({ Title = "Home", Icon = "home", Section = "หน้าหลัก" }),
+
+    -- ฟาร์มและอัตโนมัติ: โยน ฝึก ช่วยเหลือ ร้านค้า และแปลง
+    Farm = Window:AddTab({ Title = "Auto Farm", Icon = "crosshair", Section = "ฟาร์ม & อัตโนมัติ" }),
+    Assist = Window:AddTab({ Title = "Assist & Events", Icon = "sparkles" }),
+    Upgrades = Window:AddTab({ Title = "Shop & Plot", Icon = "shopping-bag" }),
+
+    -- เครื่องมือ: ภาพรวมแผนที่ ตำแหน่ง และความสามารถตัวละคร
+    Visuals = Window:AddTab({ Title = "ESP & Visuals", Icon = "eye", Section = "เครื่องมือ & ตำแหน่ง" }),
+    Teleports = Window:AddTab({ Title = "Teleports", Icon = "map-pin" }),
+    Player = Window:AddTab({ Title = "Player", Icon = "user" }),
+
+    -- ระบบ: ตั้งค่าหน้าตาและโปรไฟล์
+    Appearance = Window:AddTab({ Title = "Settings", Icon = "palette", Section = "ระบบ & ตั้งค่า" }),
+    Profiles = Window:AddTab({ Title = "Profiles", Icon = "folder" }),
+}
+
+--------------------------------------------------------------------------------
+-- THROW FOOD FOR ANIMALS — PRO FEATURE SUITE
+--------------------------------------------------------------------------------
+do
+    local ReplicatedStorage = game:GetService("ReplicatedStorage")
+    local RunService = game:GetService("RunService")
+    local CollectionService = game:GetService("CollectionService")
+    local Lighting = game:GetService("Lighting")
+    local VirtualUser = pcall(function() return game:GetService("VirtualUser") end) and game:GetService("VirtualUser") or nil
+    local UIS = game:GetService("UserInputService")
+
+    local setIdFn = setthreadidentity or (syn and syn.set_thread_identity) or setidentity
+    local getIdFn = getthreadidentity or (syn and syn.get_thread_identity) or getidentity
+    local baseIdentity = (type(getIdFn) == "function" and getIdFn()) or 8
+    local function RestoreCap()
+        if type(setIdFn) == "function" then
+            pcall(setIdFn, baseIdentity)
+        end
+    end
+
+    local origWindowToast = Window.Toast
+    Window.Toast = function(self, title, opts)
+        RestoreCap()
+        return origWindowToast(self, title, opts)
+    end
+
+    local function Toast(title, opts)
+        return Window:Toast(title, opts)
+    end
+
+    local ConfigFolder = ReplicatedStorage:WaitForChild("Config", 15)
+    local SharedFolder = ReplicatedStorage:WaitForChild("Shared", 15)
+    local PlayerScripts = LocalPlayer:WaitForChild("PlayerScripts", 15)
+    local ClientFolder = PlayerScripts and PlayerScripts:WaitForChild("Client", 15)
+    local ControllersFolder = ClientFolder and ClientFolder:WaitForChild("Controllers", 15)
+
+    local function SafeRequire(inst)
+        if not inst then return nil end
+        local ok, res = pcall(require, inst)
+        RestoreCap()
+        return ok and res or nil
+    end
+
+    local Remotes = SafeRequire(SharedFolder and SharedFolder:FindFirstChild("Remotes"))
+    local NumberFormat = SafeRequire(SharedFolder and SharedFolder:FindFirstChild("NumberFormat"))
+    local AreaUtil = SafeRequire(SharedFolder and SharedFolder:FindFirstChild("AreaUtil"))
+    local ThrowMeterMath = SafeRequire(SharedFolder and SharedFolder:FindFirstChild("ThrowMeterMath"))
+    local LuckOdds = SafeRequire(SharedFolder and SharedFolder:FindFirstChild("LuckOdds"))
+    local AdminAbuse = SafeRequire(SharedFolder and SharedFolder:FindFirstChild("AdminAbuse"))
+    local Mutations = SafeRequire(SharedFolder and SharedFolder:FindFirstChild("Mutations"))
+    local BalanceCurve = SafeRequire(SharedFolder and SharedFolder:FindFirstChild("BalanceCurve"))
+    local RingRushCourse = SafeRequire(SharedFolder and SharedFolder:FindFirstChild("RingRushCourse"))
+
+    local GameConfig = SafeRequire(ConfigFolder and ConfigFolder:FindFirstChild("GameConfig"))
+    local AreasConfig = SafeRequire(ConfigFolder and ConfigFolder:FindFirstChild("AreasConfig"))
+    local FoodsConfig = SafeRequire(ConfigFolder and ConfigFolder:FindFirstChild("FoodsConfig"))
+    local StandsConfig = SafeRequire(ConfigFolder and ConfigFolder:FindFirstChild("StandsConfig"))
+    local FenceConfig = SafeRequire(ConfigFolder and ConfigFolder:FindFirstChild("FenceConfig"))
+    local LevelConfig = SafeRequire(ConfigFolder and ConfigFolder:FindFirstChild("LevelConfig"))
+    local RarityConfig = SafeRequire(ConfigFolder and ConfigFolder:FindFirstChild("RarityConfig"))
+    local MutationsConfig = SafeRequire(ConfigFolder and ConfigFolder:FindFirstChild("MutationsConfig"))
+    local AnimalEconomy = SafeRequire(ConfigFolder and ConfigFolder:FindFirstChild("AnimalEconomy"))
+    local AdminAbuseConfig = SafeRequire(ConfigFolder and ConfigFolder:FindFirstChild("AdminAbuseConfig"))
+    local RingRushConfig = SafeRequire(ConfigFolder and ConfigFolder:FindFirstChild("RingRushConfig"))
+    local AnimalsData = SafeRequire(ReplicatedStorage:FindFirstChild("AnimalsData"))
+
+    local DataController = SafeRequire(ControllersFolder and ControllersFolder:FindFirstChild("DataController"))
+    local ClientState = SafeRequire(ControllersFolder and ControllersFolder:FindFirstChild("ClientState"))
+    local ThrowMeter = SafeRequire(ControllersFolder and ControllersFolder:FindFirstChild("ThrowMeter"))
+    local SuperThrow = SafeRequire(ControllersFolder and ControllersFolder:FindFirstChild("SuperThrow"))
+    local RevealSequence = SafeRequire(ControllersFolder and ControllersFolder:FindFirstChild("RevealSequence"))
+    local TrainingController = SafeRequire(ControllersFolder and ControllersFolder:FindFirstChild("TrainingController"))
+    local Movement = SafeRequire(ControllersFolder and ControllersFolder:FindFirstChild("Movement"))
+    local ScreenFX = SafeRequire(ControllersFolder and ControllersFolder:FindFirstChild("ScreenFX"))
+    local CameraRig = SafeRequire(ControllersFolder and ControllersFolder:FindFirstChild("CameraRig"))
+    local HUDController = SafeRequire(ControllersFolder and ControllersFolder:FindFirstChild("HUDController"))
+    local RingRushFolder = ControllersFolder and ControllersFolder:FindFirstChild("RingRush")
+    local RingRushFlight = SafeRequire(RingRushFolder and RingRushFolder:FindFirstChild("RingRushFlight"))
+    local RingRushSteering = SafeRequire(RingRushFolder and RingRushFolder:FindFirstChild("RingRushSteering"))
+
+    local AnimalNames = {}
+    local TotalAnimalCount = 0
+    if type(AnimalsData) == "table" then
+        for _, list in pairs(AnimalsData) do
+            if type(list) == "table" then
+                for _, entry in ipairs(list) do
+                    if entry.ModelName then
+                        if not AnimalNames[entry.ModelName] then
+                            TotalAnimalCount = TotalAnimalCount + 1
+                        end
+                        AnimalNames[entry.ModelName] = entry.Name or entry.ModelName
+                    end
+                end
+            end
+        end
+    end
+
+    local function FmtMoney(n)
+        if NumberFormat and NumberFormat.Money then
+            return NumberFormat.Money(tonumber(n) or 0)
+        end
+        return "$" .. tostring(math.floor(tonumber(n) or 0))
+    end
+
+    local function FmtRate(n)
+        if NumberFormat and NumberFormat.PerSecond then
+            return NumberFormat.PerSecond(tonumber(n) or 0)
+        end
+        return "$" .. tostring(math.floor(tonumber(n) or 0)) .. "/s"
+    end
+
+    local function FmtNum(n)
+        if NumberFormat and NumberFormat.Abbreviate then
+            return NumberFormat.Abbreviate(tonumber(n) or 0)
+        end
+        return tostring(n or 0)
+    end
+
+    local function GetDataReady()
+        if not DataController then return false end
+        if not DataController:IsReady() then
+            pcall(function() DataController:WaitForReady() end)
+        end
+        return DataController:IsReady()
+    end
+
+    local function GetDataVal(key, default)
+        if not DataController or not DataController:IsReady() then
+            return default
+        end
+        local v = DataController:Get(key)
+        RestoreCap()
+        if v == nil then return default end
+        return v
+    end
+
+    local function GetCharParts()
+        local char = LocalPlayer.Character
+        if not char then return nil, nil, nil end
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        local hrp = char:FindFirstChild("HumanoidRootPart") or (hum and hum.RootPart)
+        return char, hum, hrp
+    end
+
+    local function SafePivot(cf)
+        local char, hum, hrp = GetCharParts()
+        if not char or not hrp or not hum or hum.Health <= 0 then
+            return false
+        end
+        if hrp.Anchored then
+            hrp.Anchored = false
+        end
+        hrp.AssemblyLinearVelocity = Vector3.zero
+        hrp.AssemblyAngularVelocity = Vector3.zero
+        char:PivotTo(cf)
+        return true
+    end
+
+    local function GetMyPlotPart()
+        local plotIdx = LocalPlayer:GetAttribute("PlotIndex")
+        local plots = workspace:FindFirstChild("Plots")
+        if plotIdx and plots then
+            return plots:FindFirstChild(tostring(plotIdx))
+        end
+        return nil
+    end
+
+    local function GetTrainingSpotPos()
+        local plot = GetMyPlotPart()
+        if not plot or not GameConfig then return nil end
+        return plot.Position + GameConfig.Plot.TrainingSpotOffset
+    end
+
+    local function GetStarterThrowPos()
+        local starter = workspace:FindFirstChild("StarterArea")
+        if not starter then return nil end
+        local cross = starter:FindFirstChild("CrossLine")
+        local y = starter.Position.Y + starter.Size.Y / 2 + 3
+        if cross then
+            return Vector3.new(cross.Position.X, y, cross.Position.Z + 1.5), cross.Position
+        end
+        return Vector3.new(starter.Position.X, y, starter.Position.Z + starter.Size.Z / 2 + 1.5), nil
+    end
+
+    local function InvokeRemote(name, ...)
+        if not Remotes then return { Ok = false, Reason = "NoRemotes" } end
+        local res = Remotes.Invoke(name, ...)
+        RestoreCap()
+        return res
+    end
+
+    local function FireEvent(name, ...)
+        if not Remotes then return end
+        local ok, ev = pcall(Remotes.Event, name)
+        if ok and ev then
+            ev:FireServer(...)
+        end
+        RestoreCap()
+    end
+
+    local alive = true
+    local hubConns = {}
+    local function TrackConn(sig, fn)
+        local c = sig:Connect(fn)
+        table.insert(hubConns, c)
+        return c
+    end
+
+    local tfa = {
+        AutoThrow = false,
+        ThrowMode = "Silent Instant (No Cutscene)",
+        PerfectMeter = true,
+        AutoUseSuper = false,
+        ThrowDelay = 0.15,
+        ReturnAfterThrow = false,
+
+        TargetArea = "Max Power (Auto)",
+        AccountPerfectBonus = true,
+        AutoApplyPower = false,
+
+        AutoTrain = false,
+        AutoTapBonus = true,
+        AutoBuyStand1 = true,
+
+        HybridFarm = false,
+        HybridTrainSec = 10,
+        HybridThrowCount = 3,
+
+        ManualAlwaysPerfect = false,
+        SkipRevealCutscene = false,
+        RingRushAutoSteer = false,
+        ManualLuckyAutoUse = false,
+
+        AutoVoteMap = false,
+        VoteMapChoice = "1",
+        AutoClaimOffline = false,
+        AutoClaimFree = false,
+        AntiAFK = true,
+
+        AutoBuyFood = false,
+        AutoEquipBestFood = true,
+        AutoUpgradeStand = false,
+        AutoUpgradeFence = false,
+        SelectedManualFood = nil,
+
+        AutoEquipBestAnimals = false,
+        AutoPlaceEggs = false,
+
+        AutoSellFiltered = false,
+        SellKeepMinRarity = "Mythic",
+        SellKeepMutations = {
+            Diamond = true,
+            Emerald = true,
+            Ruby = true,
+            Rainbow = true,
+            Champion = true,
+        },
+        SellKeepGiant = true,
+        SellKeepNewIndex = true,
+        SellKeepBetterBest = true,
+
+        AnimalESP = false,
+        ESPRarityFilter = {
+            Legendary = true,
+            Mythic = true,
+            Secret = true,
+            Divine = true,
+            Celestial = true,
+            Eternal = true,
+            Cosmic = true,
+            Supreme = true,
+            Sovereign = true,
+        },
+        ESPOnlyMutated = false,
+        ESPExcludeOwnPlot = false,
+        ESPMaxDistance = 600,
+        AutoRefreshPlots = true,
+
+        LandingPreview = false,
+        HideOtherPets = false,
+        RemoveFog = false,
+
+        SelectedTeleportArea = nil,
+        SelectedTeleportPlayer = nil,
+    }
+
+    local session = {
+        Caught = 0,
+        SoldCount = 0,
+        SoldMoney = 0,
+        BestIncome = 0,
+        BestSummary = "None yet",
+    }
+
+    local function UpdateSessionCatch(res)
+        if type(res) ~= "table" or not res.Ok then return end
+        session.Caught = session.Caught + 1
+        local income = tonumber(res.Income) or 0
+        if income >= session.BestIncome then
+            session.BestIncome = income
+            local disp = res.DisplayName or AnimalNames[res.ModelName] or res.ModelName or "Animal"
+            local mut = res.Mutation and ("[" .. tostring(res.Mutation) .. "] ") or ""
+            local sz = (tonumber(res.Size) or 1) > 1 and string.format(" (x%.2f)", res.Size) or ""
+            session.BestSummary = string.format("%s%s (%s)%s — %s", mut, disp, tostring(res.Rarity or "?"), sz, FmtRate(income))
+        end
+    end
+
+    --------------------------------------------------------------------------
+    -- BUILD DROPDOWN VALUES FROM LIVE CONFIG
+    --------------------------------------------------------------------------
+    local areaDropdownValues = { "Max Power (Auto)" }
+    local areaIndexByLabel = {}
+    local tpAreaValues = {}
+    local tpAreaIndexByLabel = {}
+
+    if AreasConfig and AreasConfig.List then
+        for i, area in ipairs(AreasConfig.List) do
+            local label = string.format("%d. %s", i, area.Name or area.Key)
+            table.insert(areaDropdownValues, label)
+            areaIndexByLabel[label] = i
+            table.insert(tpAreaValues, label)
+            tpAreaIndexByLabel[label] = i
+        end
+    end
+    tfa.SelectedTeleportArea = tpAreaValues[1]
+
+    local foodDropdownValues = {}
+    local foodIndexByLabel = {}
+    if FoodsConfig and FoodsConfig.List then
+        for i, food in ipairs(FoodsConfig.List) do
+            local price = BalanceCurve and BalanceCurve.GetItemPrice(LocalPlayer, food) or food.Price
+            RestoreCap()
+            local label = string.format("%d. %s (%s)", i, food.Name or ("Food " .. i), FmtMoney(price))
+            table.insert(foodDropdownValues, label)
+            foodIndexByLabel[label] = i
+        end
+    end
+    RestoreCap()
+    tfa.SelectedManualFood = foodDropdownValues[1]
+
+    local rarityChoices = { "Sell All" }
+    local espRarityChoices = {}
+    if RarityConfig and RarityConfig.List then
+        for i, r in ipairs(RarityConfig.List) do
+            table.insert(espRarityChoices, r.Name)
+            if i > 1 then
+                table.insert(rarityChoices, r.Name)
+            end
+        end
+    else
+        rarityChoices = { "Sell All", "Uncommon", "Rare", "Epic", "Legendary", "Mythic", "Secret", "Divine", "Celestial", "Eternal", "Cosmic", "Supreme", "Sovereign" }
+        espRarityChoices = { "Common", "Uncommon", "Rare", "Epic", "Legendary", "Mythic", "Secret", "Divine", "Celestial", "Eternal", "Cosmic", "Supreme", "Sovereign" }
+    end
+
+    local mutationChoices = {}
+    if MutationsConfig and MutationsConfig.List then
+        for _, m in ipairs(MutationsConfig.List) do
+            table.insert(mutationChoices, m.Name)
+        end
+    else
+        mutationChoices = { "Gold", "Diamond", "Emerald", "Ruby", "Rainbow", "Champion" }
+    end
+
+    local voteMapChoices = {}
+    local voteIndexByLabel = {}
+    local voteNames = AdminAbuseConfig and AdminAbuseConfig.Vote and AdminAbuseConfig.Vote.Names or {}
+    local voteCount = AdminAbuseConfig and AdminAbuseConfig.Vote and AdminAbuseConfig.Vote.Images and #AdminAbuseConfig.Vote.Images or 4
+    for i = 1, voteCount do
+        local label = string.format("%d. %s", i, voteNames[i] or ("Map " .. i))
+        table.insert(voteMapChoices, label)
+        voteIndexByLabel[label] = i
+    end
+    tfa.VoteMapChoice = voteMapChoices[1] or "1"
+
+    --------------------------------------------------------------------------
+    -- CORE GAME ACTIONS (Verified Remotes)
+    --------------------------------------------------------------------------
+    local function EnsureNotTraining()
+        local isTraining = LocalPlayer:GetAttribute("Training") == true
+            or (TrainingController and TrainingController.IsRunning())
+        if not isTraining then
+            return true
+        end
+        if TrainingController and TrainingController.IsRunning() then
+            pcall(TrainingController.Stop)
+        end
+        InvokeRemote("Training_Stop")
+        local t0 = os.clock()
+        while alive and os.clock() - t0 < 2 do
+            if LocalPlayer:GetAttribute("Training") ~= true
+                and (not TrainingController or not TrainingController.IsRunning()) then
+                break
+            end
+            task.wait(0.08)
+        end
+        local _, _, hrp = GetCharParts()
+        if hrp and hrp.Anchored then
+            hrp.Anchored = false
+        end
+        return true
+    end
+
+    local function ApplyTargetThrowPower(silent)
+        if not LevelConfig or not AreaUtil then return false end
+        local lvl = GetDataVal("Level", 1)
+        local maxP = LevelConfig.ThrowPowerForLevel(lvl)
+        local minP = math.min(LevelConfig.MinThrowPower, maxP)
+        local targetVal = 0
+
+        if tfa.TargetArea ~= "Max Power (Auto)" then
+            local areaIdx = areaIndexByLabel[tfa.TargetArea]
+            if areaIdx then
+                local dist = AreaUtil.TargetDistanceForArea(areaIdx)
+                if tfa.AccountPerfectBonus and GameConfig then
+                    dist = dist - (GameConfig.Throw.MeterBonusStuds or 20)
+                end
+                local clamped = math.clamp(math.floor(dist + 0.5), minP, maxP)
+                targetVal = (clamped >= maxP) and 0 or clamped
+            end
+        end
+
+        local currentSet = GetDataVal("ThrowPower", 0)
+        if currentSet == targetVal then
+            return true
+        end
+
+        local res = InvokeRemote("Player_SetThrowPower", targetVal)
+        if not silent then
+            if res and res.Ok then
+                Window:Toast("Power Targeter", {
+                    Detail = targetVal == 0 and ("Set to MAX (" .. tostring(maxP) .. ")") or ("Set throw power to " .. tostring(targetVal)),
+                    Icon = "check-circle",
+                    Highlight = true,
+                })
+            else
+                Window:Toast("Power Targeter", {
+                    Detail = "Failed: " .. tostring(res and res.Reason or "Error"),
+                })
+            end
+        end
+        return res and res.Ok
+    end
+
+    local function DoBuyBestFood(silent)
+        if not FoodsConfig or not DataController or not DataController:IsReady() then return false end
+        local money = GetDataVal("Money", 0)
+        local owned = GetDataVal("OwnedFoods", {})
+        local equipped = GetDataVal("EquippedFood", 1)
+        local boughtAny = false
+
+        if tfa.AutoBuyFood then
+            for i = #FoodsConfig.List, 1, -1 do
+                local food = FoodsConfig.Get(i)
+                if food then
+                    local isOwned = owned[tostring(i)] == true or owned[i] == true
+                    if isOwned then
+                        break
+                    end
+                    local price = BalanceCurve and BalanceCurve.GetItemPrice(LocalPlayer, food) or food.Price
+                    RestoreCap()
+                    if money >= price then
+                        local res = InvokeRemote("Shop_Buy", i)
+                        if res and res.Ok then
+                            boughtAny = true
+                            if not silent then
+                                Window:Toast("Food Shop", {
+                                    Detail = "Bought " .. tostring(food.Name),
+                                    Icon = "shopping-bag",
+                                    Highlight = true,
+                                })
+                            end
+                            owned = GetDataVal("OwnedFoods", owned)
+                            if tfa.AutoEquipBestFood then
+                                InvokeRemote("Shop_Equip", i)
+                            end
+                            break
+                        end
+                    end
+                end
+            end
+        end
+
+        if tfa.AutoEquipBestFood and not boughtAny then
+            owned = GetDataVal("OwnedFoods", {})
+            equipped = GetDataVal("EquippedFood", 1)
+            for i = #FoodsConfig.List, 1, -1 do
+                if owned[tostring(i)] == true or owned[i] == true then
+                    if equipped ~= i then
+                        InvokeRemote("Shop_Equip", i)
+                    end
+                    break
+                end
+            end
+        end
+
+        return boughtAny
+    end
+
+    local function DoUpgradeStand(silent)
+        if not StandsConfig or not DataController or not DataController:IsReady() then return false end
+        local current = GetDataVal("Stand", 0)
+        local nextStand = StandsConfig.Get(current + 1)
+        if not nextStand then return false end
+        local price = BalanceCurve and BalanceCurve.GetItemPrice(LocalPlayer, nextStand) or nextStand.Price
+        RestoreCap()
+        if GetDataVal("Money", 0) < price then return false end
+        local res = InvokeRemote("Stand_Upgrade")
+        if res and res.Ok and not silent then
+            Toast("Stand Upgrade", {
+                Detail = "Upgraded to " .. tostring(nextStand.Name),
+                Icon = "trending-up",
+                Highlight = true,
+            })
+        end
+        return res and res.Ok
+    end
+
+    local function DoUpgradeFence(silent)
+        if not FenceConfig or not DataController or not DataController:IsReady() then return false end
+        local current = GetDataVal("FenceLevel", 0)
+        local nextFence = FenceConfig.Get(current + 1)
+        if not nextFence then return false end
+        if GetDataVal("Money", 0) < nextFence.Price then return false end
+        local res = InvokeRemote("Plot_UpgradeFence")
+        if res and res.Ok and not silent then
+            Window:Toast("Plot Fence", {
+                Detail = "Upgraded to " .. tostring(nextFence.Slots) .. " animal slots",
+                Icon = "shield",
+                Highlight = true,
+            })
+        end
+        return res and res.Ok
+    end
+
+    local function DoEquipBestAnimals(silent)
+        local res = InvokeRemote("Plot_EquipBest")
+        if res and res.Ok and not silent then
+            Window:Toast("Plot Manager", {
+                Detail = string.format("Equipped best (%s placed)", tostring(res.Count or 0)),
+                Icon = "check-circle",
+                Highlight = true,
+            })
+        end
+        return res and res.Ok
+    end
+
+    local function DoHatchAllEggs(maxCount, silent)
+        if not DataController or not DataController:IsReady() then return 0 end
+        local plot = GetMyPlotPart()
+        if not plot then return 0 end
+        local eggs = GetDataVal("Eggs", {})
+        local hatched = 0
+        for eggKey, count in pairs(eggs) do
+            local n = tonumber(count) or 0
+            for _ = 1, n do
+                if maxCount and hatched >= maxCount then
+                    return hatched
+                end
+                if not alive then return hatched end
+                local pos = plot.Position + Vector3.new(math.random(-6, 6), plot.Size.Y / 2, math.random(-6, 6))
+                local res = InvokeRemote("Egg_Place", eggKey, pos)
+                if res and res.Ok then
+                    hatched = hatched + 1
+                    task.wait(0.2)
+                else
+                    break
+                end
+            end
+        end
+        if hatched > 0 and not silent then
+            Window:Toast("Egg Hatcher", {
+                Detail = "Placed " .. tostring(hatched) .. " egg(s) on plot",
+                Icon = "sparkles",
+                Highlight = true,
+            })
+        end
+        return hatched
+    end
+
+    local function DoFilteredSell(silent)
+        if not DataController or not DataController:IsReady() then return 0, 0 end
+        local animals = GetDataVal("Animals", {})
+        local indexMap = GetDataVal("Index", {})
+        local bestIncome = LocalPlayer:GetAttribute("BestIncome") or 0
+
+        local minKeepRarityIdx = 999
+        if tfa.SellKeepMinRarity ~= "Sell All" and RarityConfig then
+            minKeepRarityIdx = RarityConfig.IndexOf(tfa.SellKeepMinRarity)
+        end
+
+        local keepMutMap = tfa.SellKeepMutations or {}
+        local weakestPlacedIncome = math.huge
+        local placedCount = 0
+        local maxSlots = FenceConfig and FenceConfig.SlotsFor(GetDataVal("FenceLevel", 0)) or 10
+
+        for _, entry in pairs(animals) do
+            if entry.Placed then
+                placedCount = placedCount + 1
+                local inc = Mutations and Mutations.IncomeOf(entry, bestIncome) or 0
+                if inc < weakestPlacedIncome then
+                    weakestPlacedIncome = inc
+                end
+            end
+        end
+
+        local toSell = {}
+        local totalNonBoughtBag = 0
+        local keptInPassByModel = {}
+
+        for id, entry in pairs(animals) do
+            if not entry.Placed and not entry.Bought then
+                totalNonBoughtBag = totalNonBoughtBag + 1
+                local keep = false
+
+                local eco = AnimalEconomy and AnimalEconomy.Get(entry.ModelName)
+                local rarityName = eco and eco.Rarity or "Common"
+                local rarityIdx = RarityConfig and RarityConfig.IndexOf(rarityName) or 1
+                local inc = Mutations and Mutations.IncomeOf(entry, bestIncome) or 0
+
+                if rarityIdx >= minKeepRarityIdx then
+                    keep = true
+                elseif entry.Mutation and keepMutMap[entry.Mutation] == true then
+                    keep = true
+                elseif tfa.SellKeepGiant and (tonumber(entry.Size) or 1) > 1 then
+                    keep = true
+                elseif tfa.SellKeepNewIndex and indexMap[entry.ModelName] ~= true and not keptInPassByModel[entry.ModelName] then
+                    keep = true
+                    keptInPassByModel[entry.ModelName] = true
+                elseif tfa.SellKeepBetterBest then
+                    if inc >= bestIncome and bestIncome > 0 then
+                        keep = true
+                    elseif placedCount < maxSlots and inc > 0 then
+                        keep = true
+                    elseif placedCount >= maxSlots and inc > weakestPlacedIncome then
+                        keep = true
+                    end
+                end
+
+                if not keep then
+                    table.insert(toSell, id)
+                end
+            end
+        end
+
+        if #toSell == 0 then
+            return 0, 0
+        end
+
+        if #toSell == totalNonBoughtBag and totalNonBoughtBag > 1 then
+            local res = InvokeRemote("Plot_SellAll")
+            if res and res.Ok then
+                local cnt = tonumber(res.Count) or #toSell
+                local money = tonumber(res.Money) or 0
+                session.SoldCount = session.SoldCount + cnt
+                session.SoldMoney = session.SoldMoney + money
+                if not silent then
+                    Window:Toast("Auto Sell", {
+                        Detail = string.format("Sold %d animal(s) for %s", cnt, FmtMoney(money)),
+                        Icon = "dollar-sign",
+                        Highlight = true,
+                    })
+                end
+                return cnt, money
+            end
+        end
+
+        local soldCnt = 0
+        local soldMoney = 0
+        for _, id in ipairs(toSell) do
+            if not alive then break end
+            local res = InvokeRemote("Plot_SellAnimal", id)
+            if res and res.Ok then
+                soldCnt = soldCnt + 1
+                soldMoney = soldMoney + (tonumber(res.Money) or 0)
+            end
+            task.wait(0.05)
+        end
+
+        if soldCnt > 0 then
+            session.SoldCount = session.SoldCount + soldCnt
+            session.SoldMoney = session.SoldMoney + soldMoney
+            if not silent then
+                Window:Toast("Auto Sell", {
+                    Detail = string.format("Sold %d animal(s) for %s", soldCnt, FmtMoney(soldMoney)),
+                    Icon = "dollar-sign",
+                    Highlight = true,
+                })
+            end
+        end
+        return soldCnt, soldMoney
+    end
+
+    local lastAutoBestTime = 0
+    local function RunPostCatchMaintenance()
+        if tfa.AutoUpgradeStand then DoUpgradeStand(true) end
+        if tfa.AutoUpgradeFence then DoUpgradeFence(true) end
+        if tfa.AutoBuyFood or tfa.AutoEquipBestFood then DoBuyBestFood(true) end
+        if tfa.AutoEquipBestAnimals and (os.clock() - lastAutoBestTime > 1.5) then
+            lastAutoBestTime = os.clock()
+            DoEquipBestAnimals(true)
+        end
+        if tfa.AutoSellFiltered then
+            DoFilteredSell(true)
+        end
+        if tfa.AutoPlaceEggs then
+            DoHatchAllEggs(3, true)
+        end
+        if tfa.AutoApplyPower then
+            ApplyTargetThrowPower(true)
+        end
+    end
+
+    local function DoSilentThrowOnce()
+        if not alive then return false end
+        if ClientState and ClientState.Busy then
+            return false, "ClientBusy"
+        end
+        local char, hum, hrp = GetCharParts()
+        if not char or not hum or not hrp or hum.Health <= 0 then
+            return false, "NoCharacter"
+        end
+
+        EnsureNotTraining()
+
+        local throwPos = GetStarterThrowPos()
+        if not throwPos then
+            return false, "NoStarterArea"
+        end
+
+        local oldCF = tfa.ReturnAfterThrow and char:GetPivot() or nil
+        if (hrp.Position - throwPos).Magnitude > 6 then
+            SafePivot(CFrame.lookAt(throwPos, throwPos + Vector3.new(0, 0, -1)))
+            task.wait(0.35)
+        end
+
+        if tfa.AutoApplyPower then
+            ApplyTargetThrowPower(true)
+        end
+        if tfa.AutoBuyFood or tfa.AutoEquipBestFood then
+            DoBuyBestFood(true)
+        end
+
+        local startRes = InvokeRemote("Throw_Start")
+        if not startRes or not startRes.Ok then
+            local reason = startRes and startRes.Reason or "Unknown"
+            if reason == "TooFar" then
+                SafePivot(CFrame.lookAt(throwPos, throwPos + Vector3.new(0, 0, -1)))
+                task.wait(0.45)
+            elseif reason == "Training" then
+                InvokeRemote("Training_Stop")
+                task.wait(0.25)
+            elseif reason == "Cooldown" then
+                task.wait(0.25)
+            else
+                task.wait(0.2)
+            end
+            return false, reason
+        end
+
+        if startRes.RingRush then
+            -- Active Ring Rush event: farm up to 100 rings safely if RingRushCourse exists
+            local rrBegin = InvokeRemote("RingRush_Begin")
+            if rrBegin and rrBegin.Ok and RingRushCourse and RingRushConfig and AreaUtil then
+                local launch = AreaUtil.GetLaunchPosition()
+                local course = RingRushCourse.new(rrBegin.Seed, launch)
+                local passes = 0
+                local elapsed = 0
+                local fromDist = 0
+                local fromTime = 0
+                local targetRings = 100
+                for idx = 1, targetRings do
+                    if not alive or not (tfa.AutoThrow or tfa.HybridFarm) then break end
+                    local ring = course:GetRing(idx)
+                    local spd = RingRushCourse.GetSpeed(passes, 0)
+                    local dt = (ring.Distance - fromDist) / spd + 0.03
+                    task.wait(dt)
+                    elapsed = fromTime + dt
+                    local offset = course:GetRingOffset(ring, elapsed)
+                    local rep = InvokeRemote("RingRush_Report", idx, true, offset.X, offset.Y, elapsed)
+                    passes = passes + 1
+                    fromDist = ring.Distance
+                    fromTime = elapsed
+                    if rep and rep.Ended then break end
+                end
+                InvokeRemote("RingRush_End")
+                InvokeRemote("Throw_Cancel")
+                if oldCF then SafePivot(oldCF) end
+                return true, "RingRush"
+            else
+                InvokeRemote("Throw_Cancel")
+                if oldCF then SafePivot(oldCF) end
+                return false, "RingRush"
+            end
+        end
+
+        if tfa.AutoUseSuper and (GetDataVal("SuperThrows", 0) > 0) then
+            pcall(InvokeRemote, "Throw_UseSuper")
+        end
+
+        local ratio = 0.5
+        if tfa.PerfectMeter and ThrowMeterMath then
+            FireEvent("Throw_MeterStarted")
+            local hp = ThrowMeterMath.HalfPeriod()
+            task.wait(hp)
+            ratio = 1
+        else
+            FireEvent("Throw_MeterStarted")
+            task.wait(0.15)
+        end
+
+        local res = InvokeRemote("Throw_Resolve", ratio)
+        if not res or not res.Ok then
+            InvokeRemote("Throw_Cancel")
+            if oldCF then SafePivot(oldCF) end
+            return false, res and res.Reason or "ResolveFail"
+        end
+
+        local comp = InvokeRemote("Throw_Complete")
+        if comp and comp.Ok then
+            UpdateSessionCatch(res)
+            task.spawn(RunPostCatchMaintenance)
+        end
+
+        if oldCF then
+            SafePivot(oldCF)
+        end
+        return true
+    end
+
+    local function DoLegitWalkThrowOnce()
+        if not alive then return false end
+        if ClientState and ClientState.Busy then
+            task.wait(0.2)
+            return false
+        end
+        local char, hum, hrp = GetCharParts()
+        if not char or not hum or not hrp or hum.Health <= 0 then
+            return false
+        end
+        EnsureNotTraining()
+        local starter = workspace:FindFirstChild("StarterArea")
+        local cross = starter and starter:FindFirstChild("CrossLine")
+        if not starter or not cross then return false end
+        local pos = Vector3.new(cross.Position.X, starter.Position.Y + starter.Size.Y / 2 + 3, cross.Position.Z - 2.5)
+        SafePivot(CFrame.lookAt(pos, pos + Vector3.new(0, 0, -1)))
+        local waitStart = os.clock()
+        while alive and (tfa.AutoThrow or tfa.HybridFarm) and os.clock() - waitStart < 15 do
+            if not (ClientState and ClientState.Busy == "Throw") and os.clock() - waitStart > 0.6 then
+                break
+            end
+            task.wait(0.2)
+        end
+        task.spawn(RunPostCatchMaintenance)
+        return true
+    end
+
+    local function DoStartSilentTrain()
+        local spot = GetTrainingSpotPos()
+        if not spot then return false end
+        if GetDataVal("Stand", 0) < 1 then
+            if tfa.AutoBuyStand1 then
+                DoUpgradeStand(true)
+            end
+            if GetDataVal("Stand", 0) < 1 then
+                return false, "NoStand"
+            end
+        end
+
+        if LocalPlayer:GetAttribute("Training") == true then
+            return true
+        end
+
+        -- Stand 4 studs from TrainingSpot: inside server's 5-stud range, outside client's 3.2-stud cutscene trigger
+        local targetPos = spot + Vector3.new(4, 3, 0)
+        local _, _, hrp = GetCharParts()
+        if not hrp then return false end
+        if (hrp.Position - targetPos).Magnitude > 2.5 then
+            SafePivot(CFrame.lookAt(targetPos, Vector3.new(spot.X, targetPos.Y, spot.Z)))
+            task.wait(0.4)
+        end
+        local res = InvokeRemote("Training_Start")
+        if res and res.Ok then
+            return true
+        end
+        if res and res.Reason == "TooFar" then
+            SafePivot(CFrame.lookAt(targetPos, Vector3.new(spot.X, targetPos.Y, spot.Z)))
+            task.wait(0.45)
+            local retry = InvokeRemote("Training_Start")
+            return retry and retry.Ok
+        end
+        return false, res and res.Reason
+    end
+
+    --------------------------------------------------------------------------
+    -- HOME TAB: LIVE DASHBOARD & QUICK ACTIONS
+    --------------------------------------------------------------------------
+    local HomeStatus = Tabs.Home:AddSection({
+        Title = "Account & Server Status",
+        Icon = "activity",
+    })
+
+    local lblCash = HomeStatus:AddLabel({ Title = "Cash & Income", Value = "Loading..." })
+    local lblLevel = HomeStatus:AddLabel({ Title = "Level & Power", Value = "Loading..." })
+    local lblLuck = HomeStatus:AddLabel({ Title = "Server Boosts", Value = "Loading..." })
+    local lblResources = HomeStatus:AddLabel({ Title = "Super Throws & Eggs", Value = "Loading..." })
+    local lblIndex = HomeStatus:AddLabel({ Title = "Index Progress", Value = "Loading..." })
+    local lblSession = HomeStatus:AddLabel({ Title = "Session Caught / Sold", Value = "0 caught | 0 sold ($0)" })
+    local lblBestCatch = HomeStatus:AddParagraph({ Title = "Best Session Catch", Content = "None yet" })
+
+    HomeStatus:AddButton({
+        Title = "Reset Session Stats",
+        Description = "รีเซ็ตจำนวนที่จับได้ ยอดขายกำไร และสถิติสัตว์ที่จับได้ดีที่สุด",
+        ButtonText = "Reset",
+        Callback = function()
+            session.Caught = 0
+            session.SoldCount = 0
+            session.SoldMoney = 0
+            session.BestIncome = 0
+            session.BestSummary = "None yet"
+            lblSession:SetValue("0 caught | 0 sold ($0)")
+            lblBestCatch:SetContent("None yet")
+        end,
+    })
+
+    local HomeQuick = Tabs.Home:AddSection({
+        Title = "Quick Actions",
+        Icon = "zap",
+    })
+
+    HomeQuick:AddButton({
+        Title = "Claim Offline Earnings",
+        Description = "รับเงินออฟไลน์ที่รอรับอยู่ทันทีหากมี",
+        ButtonText = "Claim",
+        Style = "Primary",
+        Callback = function()
+            local res = InvokeRemote("Offline_Claim")
+            Window:Toast("Offline Claim", {
+                Detail = (res and res.Ok) and "Claimed offline earnings!" or ("Nothing to claim (" .. tostring(res and res.Reason or "None") .. ")"),
+                Icon = "check-circle",
+            })
+        end,
+    })
+
+    HomeQuick:AddButton({
+        Title = "Claim Free Animal",
+        Description = "รับรางวัลสัตว์ฟรีจากร้าน Exclusive Shop",
+        ButtonText = "Claim",
+        Callback = function()
+            local res = InvokeRemote("Shop_ClaimFree")
+            Window:Toast("Free Animal", {
+                Detail = (res and res.Ok) and "Claimed free animal!" or ("Already claimed or unavailable (" .. tostring(res and res.Reason or "Unavailable") .. ")"),
+                Icon = "gift",
+            })
+        end,
+    })
+
+    HomeQuick:AddButton({
+        Title = "Equip Best Animals",
+        Description = "วางสัตว์ที่สร้างรายได้ต่อวินาทีสูงสุดลงแปลงของคุณอัตโนมัติ",
+        ButtonText = "Equip Best",
+        Style = "Primary",
+        Callback = function()
+            DoEquipBestAnimals(false)
+        end,
+    })
+
+    HomeQuick:AddButton({
+        Title = "Sell All Non-Protected Animals",
+        Description = "ขายสัตว์ทั้งหมดในกระเป๋าที่ยังไม่ถูกวางและไม่ใช่สัตว์ที่ซื้อด้วย Robux",
+        ButtonText = "Sell All",
+        Style = "Destructive",
+        Callback = function()
+            local res = InvokeRemote("Plot_SellAll")
+            if res and res.Ok then
+                local cnt = tonumber(res.Count) or 0
+                local money = tonumber(res.Money) or 0
+                session.SoldCount = session.SoldCount + cnt
+                session.SoldMoney = session.SoldMoney + money
+                Window:Toast("Sell All", {
+                    Detail = string.format("Sold %d animal(s) for %s", cnt, FmtMoney(money)),
+                    Icon = "dollar-sign",
+                    Highlight = true,
+                })
+            else
+                Window:Toast("Sell All", {
+                    Detail = "Nothing to sell (" .. tostring(res and res.Reason or "Empty") .. ")",
+                })
+            end
+        end,
+    })
+
+    HomeQuick:AddButton({
+        Title = "Fix Stuck State (Unfreeze / Reset)",
+        Description = "ยกเลิกสถานะโยนหรือฝึกที่ค้างอยู่ คืนกล้อง และปลดล็อกการเคลื่อนที่ของตัวละคร",
+        ButtonText = "Unfreeze",
+        Callback = function()
+            pcall(InvokeRemote, "Throw_Cancel")
+            pcall(InvokeRemote, "Training_Stop")
+            if TrainingController and TrainingController.IsRunning and TrainingController.IsRunning() then
+                pcall(TrainingController.Stop)
+            end
+            if ClientState then ClientState.Busy = nil end
+            if Movement and Movement.Unlock then pcall(Movement.Unlock) end
+            if CameraRig and CameraRig.Release then pcall(CameraRig.Release) end
+            if ScreenFX and ScreenFX.Reset then pcall(ScreenFX.Reset) end
+            if HUDController and HUDController.SetGameplayVisible then pcall(HUDController.SetGameplayVisible, true) end
+            local cam = workspace.CurrentCamera
+            local char, hum, hrp = GetCharParts()
+            if hrp then hrp.Anchored = false end
+            if cam and hum then
+                cam.CameraType = Enum.CameraType.Custom
+                cam.CameraSubject = hum
+            end
+            RestoreCap()
+            Window:Toast("State Reset", {
+                Detail = "Character movement, camera, and remote states unlocked.",
+                Icon = "check-circle",
+                Highlight = true,
+            })
+        end,
+    })
+
+    local HomeGuide = Tabs.Home:AddSection({
+        Title = "Controls & Shortcuts",
+        Icon = "keyboard",
+        Collapsible = true,
+        Collapsed = true,
+    })
+    HomeGuide:AddParagraph({
+        Title = "Zero X Keybinds",
+        Content = "• Right Ctrl: แสดง / ซ่อนหน้าต่าง UI\n"
+            .. "• Ctrl + K: เปิดช่องคำสั่ง Spotlight\n"
+            .. "• ช่องค้นหา: กรองตัวควบคุมในทุกแท็บ\n"
+            .. "• Settings / Profiles: ปรับแต่งธีมและบันทึกค่าล่วงหน้า (Autoload)",
+    })
+
+    --------------------------------------------------------------------------
+    -- AUTO FARM TAB
+    --------------------------------------------------------------------------
+    local ThrowFarmSec = Tabs.Farm:AddSection({
+        Title = "Auto Throw",
+        Icon = "send",
+    })
+
+    ThrowFarmSec:AddParagraph({
+        Title = "Silent Instant Throw",
+        Content = "ยืนหลังเส้นเริ่มต้นอย่างปลอดภัยเพื่อไม่ให้กล้องเกมตัดฉาก จากนั้นยิง Throw_MeterStarted รอจนได้พลัง PERFECT 100% (+20 สตั๊ด) และจบการโยนทันที",
+    })
+
+    ThrowFarmSec:AddToggle("TFAAutoThrow", {
+        Title = "Auto Throw",
+        Description = "โยนอาหารที่ใส่อยู่ซ้ำ ๆ เพื่อจับสัตว์โดยอัตโนมัติ",
+        Default = false,
+        Callback = function(v)
+            tfa.AutoThrow = v
+        end,
+    })
+
+    ThrowFarmSec:AddDropdown("TFAThrowMode", {
+        Title = "Throw Mode",
+        Description = "Silent Instant จะข้ามการบินและตัดฉาก ส่วน Legit Walk จะเดินข้ามเส้นแบบปกติ",
+        Values = { "Silent Instant (No Cutscene)", "Legit Walk (Trigger Game Throw)" },
+        Default = "Silent Instant (No Cutscene)",
+        Callback = function(v)
+            tfa.ThrowMode = v
+        end,
+    })
+
+    ThrowFarmSec:AddToggle("TFAPerfectMeter", {
+        Title = "Always Perfect (+20 Bonus Studs)",
+        Description = "จับจังหวะ Throw_MeterStarted ที่ HalfPeriod (~1.09 วิ) เพื่อรับโบนัสความแม่นยำ 100% สูงสุด",
+        Default = true,
+        Callback = function(v)
+            tfa.PerfectMeter = v
+        end,
+    })
+
+    ThrowFarmSec:AddToggle("TFAAutoUseSuper", {
+        Title = "Auto Use Super Throw",
+        Description = "ใช้ Super Throw ที่สะสมไว้ (เพิ่มโอกาสหลายรอบ) โดยอัตโนมัติเมื่อมี",
+        Default = false,
+        Callback = function(v)
+            tfa.AutoUseSuper = v
+        end,
+    })
+
+    ThrowFarmSec:AddToggle("TFAReturnAfterThrow", {
+        Title = "Return Position After Throw",
+        Description = "คืนตำแหน่งเดิมของคุณหลังจบการโยนแบบ Silent แต่ละรอบ",
+        Default = false,
+        Callback = function(v)
+            tfa.ReturnAfterThrow = v
+        end,
+    })
+
+    ThrowFarmSec:AddSlider("TFAThrowDelay", {
+        Title = "Throw Interval Buffer",
+        Description = "เวลาหน่วงเพิ่มระหว่างการโยนแต่ละครั้ง (เซิร์ฟเวอร์คูลดาวน์ 1.5 วิ)",
+        Min = 0.05,
+        Max = 5,
+        Default = 0.15,
+        Increment = 0.05,
+        Rounding = 2,
+        Suffix = "s",
+        Callback = function(v)
+            tfa.ThrowDelay = v
+        end,
+    })
+
+    local PowerSec = Tabs.Farm:AddSection({
+        Title = "Throw Power Targeter",
+        Icon = "target",
+    })
+
+    PowerSec:AddDropdown("TFATargetArea", {
+        Title = "Target Biome / Distance",
+        Description = "เลือกไบโอมที่ต้องการเล็ง หรือเลือก Max Power เพื่อโยนให้ไกลที่สุดเสมอ",
+        Values = areaDropdownValues,
+        Default = "Max Power (Auto)",
+        Searchable = true,
+        Callback = function(v)
+            tfa.TargetArea = v
+            if tfa.AutoApplyPower then
+                task.spawn(ApplyTargetThrowPower, true)
+            end
+        end,
+    })
+
+    PowerSec:AddToggle("TFAAccountPerfectBonus", {
+        Title = "Compensate +20 Perfect Meter Bonus",
+        Description = "หัก 20 สตั๊ดออกจากพลังเป้าหมาย เพื่อให้การโยน Perfect ตกลงกลางไบโอมพอดี",
+        Default = true,
+        Callback = function(v)
+            tfa.AccountPerfectBonus = v
+            if tfa.AutoApplyPower then
+                task.spawn(ApplyTargetThrowPower, true)
+            end
+        end,
+    })
+
+    PowerSec:AddToggle("TFAAutoApplyPower", {
+        Title = "Auto Sync Target Power on Level Up",
+        Description = "อัปเดต Player_SetThrowPower อัตโนมัติทุกครั้งที่เลเวลของคุณเพิ่มขึ้น",
+        Default = false,
+        Callback = function(v)
+            tfa.AutoApplyPower = v
+            if v then
+                task.spawn(ApplyTargetThrowPower, true)
+            end
+        end,
+    })
+
+    PowerSec:AddButton({
+        Title = "Apply Target Throw Power Now",
+        Description = "อัปเดตพลังโยนของคุณทันทีให้ตรงกับไบโอมเป้าหมายที่เลือก",
+        ButtonText = "Apply",
+        Style = "Primary",
+        Callback = function()
+            ApplyTargetThrowPower(false)
+        end,
+    })
+
+    local TrainSec = Tabs.Farm:AddSection({
+        Title = "Auto Train (Pull-Up Bar)",
+        Icon = "dumbbell",
+    })
+
+    TrainSec:AddToggle("TFAAutoTrain", {
+        Title = "Silent Auto Train",
+        Description = "ยืนในระยะบาร์ของเซิร์ฟเวอร์โดยไม่กระตุ้นให้กล้องล็อก แล้วฟาร์ม XP จากบาร์โหน",
+        Default = false,
+        Callback = function(v)
+            tfa.AutoTrain = v
+            if not v and not tfa.HybridFarm then
+                task.spawn(EnsureNotTraining)
+            end
+        end,
+    })
+
+    TrainSec:AddToggle("TFAAutoTapBonus", {
+        Title = "Auto Claim x2 Training Bonus",
+        Description = "เก็บลูกบอลแตะ x2 XP อัตโนมัติทั้งในโหมด Auto Train และการฝึกแบบกำหนดเอง",
+        Default = true,
+        Callback = function(v)
+            tfa.AutoTapBonus = v
+        end,
+    })
+
+    TrainSec:AddToggle("TFAAutoBuyStand1", {
+        Title = "Auto Buy First Stand",
+        Description = "ซื้อบาร์ไม้ ($1) อัตโนมัติหากคุณยังไม่มีแท่น",
+        Default = true,
+        Callback = function(v)
+            tfa.AutoBuyStand1 = v
+        end,
+    })
+
+    local HybridSec = Tabs.Farm:AddSection({
+        Title = "Hybrid Farm (Train + Throw Cycle)",
+        Icon = "repeat",
+    })
+
+    HybridSec:AddParagraph({
+        Title = "All-in-One Progression Loop",
+        Content = "สลับระหว่าง Auto Train และ Auto Throw แบบ Silent พร้อมทำงานอัปเกรด/equip/ขาย ที่เปิดไว้ระหว่างรอบ (จะแทนที่ Auto Train และ Auto Throw เดี่ยว ๆ ขณะทำงาน)",
+    })
+
+    HybridSec:AddToggle("TFAHybridFarm", {
+        Title = "Enable Hybrid Farm",
+        Description = "วนฝึก XP และจับสัตว์โดยอัตโนมัติ",
+        Default = false,
+        Callback = function(v)
+            tfa.HybridFarm = v
+            if not v and not tfa.AutoTrain then
+                task.spawn(EnsureNotTraining)
+            end
+        end,
+    })
+
+    HybridSec:AddSlider("TFAHybridTrainSec", {
+        Title = "Train Duration per Cycle",
+        Min = 3,
+        Max = 120,
+        Default = 10,
+        Increment = 1,
+        Suffix = "s",
+        Callback = function(v)
+            tfa.HybridTrainSec = v
+        end,
+    })
+
+    HybridSec:AddSlider("TFAHybridThrowCount", {
+        Title = "Throws per Cycle",
+        Min = 1,
+        Max = 25,
+        Default = 3,
+        Increment = 1,
+        Callback = function(v)
+            tfa.HybridThrowCount = v
+        end,
+    })
+
+    --------------------------------------------------------------------------
+    -- ASSIST & EVENTS TAB
+    --------------------------------------------------------------------------
+    local ManualSec = Tabs.Assist:AddSection({
+        Title = "Manual Throw & Ring Rush Assist",
+        Icon = "wand",
+    })
+
+    ManualSec:AddToggle("TFAManualAlwaysPerfect", {
+        Title = "Always Perfect Meter (Manual Throws)",
+        Description = "ล็อกมิเตอร์โยนแบบมือให้อยู่ที่ 100% และแตะอัตโนมัติที่ HalfPeriod เพื่อรับโบนัส +20 แน่นอน",
+        Default = false,
+        Callback = function(v)
+            tfa.ManualAlwaysPerfect = v
+        end,
+    })
+
+    ManualSec:AddToggle("TFASkipRevealCutscene", {
+        Title = "Skip Animal Reveal Cutscene",
+        Description = "ข้ามแอนิเมชันสัตว์เดินเข้ามา 5-10 วิ และการ์ดเปิดตัวหลังการโยนแบบมือ",
+        Default = false,
+        Callback = function(v)
+            tfa.SkipRevealCutscene = v
+        end,
+    })
+
+    ManualSec:AddToggle("TFAManualLuckyAutoUse", {
+        Title = "Auto Activate Saved Super Throw (Manual)",
+        Description = "ใช้ Super Throw ที่บันทึกไว้โดยอัตโนมัติเมื่อเริ่มการโยนแบบมือ หากมี",
+        Default = false,
+        Callback = function(v)
+            tfa.ManualLuckyAutoUse = v
+        end,
+    })
+
+    ManualSec:AddToggle("TFARingRushAutoSteer", {
+        Title = "Ring Rush Auto-Steer (Aimbot + Dodge)",
+        Description = "บังคับทิศทางอาหารให้เข้ากลางวง Ring Rush ทุกวงและหลบตัวป่วนอัตโนมัติ",
+        Default = false,
+        Callback = function(v)
+            tfa.RingRushAutoSteer = v
+        end,
+    })
+
+    local EventSec = Tabs.Assist:AddSection({
+        Title = "Live Events & Protection",
+        Icon = "calendar",
+    })
+
+    EventSec:AddToggle("TFAAutoVoteMap", {
+        Title = "Auto Vote Admin Abuse Map",
+        Description = "ลงคะแนนอัตโนมัติเมื่อเปิดโหวตแผนที่ Admin Abuse",
+        Default = false,
+        Callback = function(v)
+            tfa.AutoVoteMap = v
+        end,
+    })
+
+    EventSec:AddDropdown("TFAVoteMapChoice", {
+        Title = "Preferred Vote Map",
+        Values = voteMapChoices,
+        Default = voteMapChoices[1],
+        Callback = function(v)
+            tfa.VoteMapChoice = v
+        end,
+    })
+
+    EventSec:AddToggle("TFAAutoClaimOffline", {
+        Title = "Auto Claim Offline Earnings",
+        Description = "เรียก Offline_Claim อัตโนมัติทุกครั้งที่มีเงินออฟไลน์รอรับ",
+        Default = false,
+        Callback = function(v)
+            tfa.AutoClaimOffline = v
+        end,
+    })
+
+    EventSec:AddToggle("TFAAutoClaimFree", {
+        Title = "Auto Claim Free Animal",
+        Description = "รับสัตว์ฟรีจาก Exclusive Shop อัตโนมัติหากยังไม่ได้รับ",
+        Default = false,
+        Callback = function(v)
+            tfa.AutoClaimFree = v
+        end,
+    })
+
+    EventSec:AddToggle("TFAAntiAFK", {
+        Title = "Anti-AFK (Prevent 18m Rejoin / Idle Kick)",
+        Description = "ทำให้เซสชันทำงานอยู่ตลอดเพื่อป้องกันการเตะเพราะไม่ได้ใช้งานและ AFK_Rejoin",
+        Default = true,
+        Callback = function(v)
+            tfa.AntiAFK = v
+        end,
+    })
+
+    --------------------------------------------------------------------------
+    -- SHOP & PLOT TAB
+    --------------------------------------------------------------------------
+    local ShopSec = Tabs.Upgrades:AddSection({
+        Title = "Auto Shop & Upgrades",
+        Icon = "trending-up",
+    })
+
+    ShopSec:AddToggle("TFAAutoBuyFood", {
+        Title = "Auto Buy Best Affordable Food",
+        Description = "ซื้ออาหารระดับสูงสุดที่ปลดล็อกแล้วและมีเงินพอโดยอัตโนมัติ",
+        Default = false,
+        Callback = function(v)
+            tfa.AutoBuyFood = v
+            if v then task.spawn(DoBuyBestFood, true) end
+        end,
+    })
+
+    ShopSec:AddToggle("TFAAutoEquipBestFood", {
+        Title = "Auto Equip Highest Owned Food",
+        Description = "ตรวจสอบให้อาหารที่ดีที่สุดที่คุณมีถูกใส่อยู่เสมอ",
+        Default = true,
+        Callback = function(v)
+            tfa.AutoEquipBestFood = v
+            if v then task.spawn(DoBuyBestFood, true) end
+        end,
+    })
+
+    ShopSec:AddToggle("TFAAutoUpgradeStand", {
+        Title = "Auto Upgrade Pull-Up Stand",
+        Description = "ซื้ออัปเกรดบาร์โหนชิ้นถัดไปอัตโนมัติเมื่อเงินพอ",
+        Default = false,
+        Callback = function(v)
+            tfa.AutoUpgradeStand = v
+            if v then task.spawn(DoUpgradeStand, true) end
+        end,
+    })
+
+    ShopSec:AddToggle("TFAAutoUpgradeFence", {
+        Title = "Auto Upgrade Plot Fence",
+        Description = "อัปเกรดช่องรั้วแปลงอัตโนมัติเมื่อเงินพอ",
+        Default = false,
+        Callback = function(v)
+            tfa.AutoUpgradeFence = v
+            if v then task.spawn(DoUpgradeFence, true) end
+        end,
+    })
+
+    ShopSec:AddButton({
+        Title = "Buy & Equip Best Food Now",
+        ButtonText = "Buy Food",
+        Style = "Primary",
+        Callback = function()
+            local ok = DoBuyBestFood(false)
+            if not ok then
+                Window:Toast("Food Shop", { Detail = "Already own best affordable food or not enough cash." })
+            end
+        end,
+    })
+
+    ShopSec:AddButton({
+        Title = "Upgrade Stand Now",
+        ButtonText = "Upgrade Stand",
+        Callback = function()
+            if not DoUpgradeStand(false) then
+                Window:Toast("Stand Upgrade", { Detail = "Max stand reached or not enough cash." })
+            end
+        end,
+    })
+
+    ShopSec:AddButton({
+        Title = "Upgrade Fence Now",
+        ButtonText = "Upgrade Fence",
+        Callback = function()
+            if not DoUpgradeFence(false) then
+                Window:Toast("Plot Fence", { Detail = "Max fence reached or not enough cash." })
+            end
+        end,
+    })
+
+    ShopSec:AddDropdown("TFAManualFoodSelect", {
+        Title = "Select Food to Buy / Equip",
+        Values = foodDropdownValues,
+        Default = foodDropdownValues[1],
+        Searchable = true,
+        Callback = function(v)
+            tfa.SelectedManualFood = v
+        end,
+    })
+
+    ShopSec:AddButton({
+        Title = "Buy / Equip Selected Food",
+        Description = "ใส่อาหารที่เลือกหากมีอยู่แล้ว มิฉะนั้นจะซื้อแล้วใส่อาหารนั้นให้",
+        ButtonText = "Buy / Equip",
+        Callback = function()
+            local idx = foodIndexByLabel[tfa.SelectedManualFood]
+            if not idx then return end
+            local owned = GetDataVal("OwnedFoods", {})
+            if owned[tostring(idx)] == true or owned[idx] == true then
+                local res = InvokeRemote("Shop_Equip", idx)
+                Window:Toast("Food Shop", {
+                    Detail = (res and res.Ok) and ("Equipped " .. tostring(tfa.SelectedManualFood)) or ("Equip failed"),
+                    Icon = "check-circle",
+                })
+            else
+                local res = InvokeRemote("Shop_Buy", idx)
+                if res and res.Ok then
+                    InvokeRemote("Shop_Equip", idx)
+                end
+                Window:Toast("Food Shop", {
+                    Detail = (res and res.Ok) and ("Bought & equipped " .. tostring(tfa.SelectedManualFood)) or ("Failed: " .. tostring(res and res.Reason or "Money")),
+                    Icon = "shopping-bag",
+                })
+            end
+        end,
+    })
+
+    local PlotSec = Tabs.Upgrades:AddSection({
+        Title = "Plot & Egg Management",
+        Icon = "layers",
+    })
+
+    PlotSec:AddToggle("TFAAutoEquipBestAnimals", {
+        Title = "Auto Equip Best Animals",
+        Description = "อัปเดตแปลงของคุณด้วยสัตว์ที่รายได้สูงสุดอัตโนมัติเมื่อจับได้หรืออัปเกรดช่อง",
+        Default = false,
+        Callback = function(v)
+            tfa.AutoEquipBestAnimals = v
+            if v then task.spawn(DoEquipBestAnimals, true) end
+        end,
+    })
+
+    PlotSec:AddToggle("TFAAutoPlaceEggs", {
+        Title = "Auto Hatch Owned Eggs",
+        Description = "วางไข่ Enchanted / Rainbow / Event จากกระเป๋าลงแปลงโดยอัตโนมัติ",
+        Default = false,
+        Callback = function(v)
+            tfa.AutoPlaceEggs = v
+            if v then task.spawn(DoHatchAllEggs, 3, true) end
+        end,
+    })
+
+    PlotSec:AddButton({
+        Title = "Hatch All Owned Eggs Now",
+        Description = "วางไข่ทั้งหมดในกระเป๋าลงแปลง",
+        ButtonText = "Hatch All",
+        Callback = function()
+            local cnt = DoHatchAllEggs(nil, false)
+            if cnt == 0 then
+                Window:Toast("Egg Hatcher", { Detail = "No eggs in inventory." })
+            end
+        end,
+    })
+
+    local SellSec = Tabs.Upgrades:AddSection({
+        Title = "Smart Filtered Auto Sell",
+        Icon = "dollar-sign",
+    })
+
+    SellSec:AddParagraph({
+        Title = "Safe Backpack Filter",
+        Content = "ขายเฉพาะสัตว์ในกระเป๋าที่ยังไม่ถูกวางและไม่ใช่สัตว์ Robux ที่ไม่ผ่านกฎการเก็บที่เลือกไว้ด้านล่าง",
+    })
+
+    SellSec:AddToggle("TFAAutoSellFiltered", {
+        Title = "Enable Filtered Auto Sell",
+        Description = "ขายสัตว์ในกระเป๋าที่ไม่ต้องการอัตโนมัติหลังจับได้หรือเป็นระยะ",
+        Default = false,
+        Callback = function(v)
+            tfa.AutoSellFiltered = v
+            if v then task.spawn(DoFilteredSell, true) end
+        end,
+    })
+
+    SellSec:AddDropdown("TFASellKeepMinRarity", {
+        Title = "Keep Rarity >= ",
+        Description = "สัตว์ที่มี rarity เท่ากับหรือสูงกว่านี้จะถูกเก็บ ส่วน rarity ที่ต่ำกว่าอาจถูกขาย",
+        Values = rarityChoices,
+        Default = "Mythic",
+        Callback = function(v)
+            tfa.SellKeepMinRarity = v
+        end,
+    })
+
+    SellSec:AddDropdown("TFASellKeepMutations", {
+        Title = "Keep Mutations",
+        Description = "ไม่ขายสัตว์ที่มี mutation ใด ๆ ในรายการนี้",
+        Values = mutationChoices,
+        Multi = true,
+        AllowNull = true,
+        Default = { "Diamond", "Emerald", "Ruby", "Rainbow", "Champion" },
+        Callback = function(v)
+            tfa.SellKeepMutations = v
+        end,
+    })
+
+    SellSec:AddToggle("TFASellKeepGiant", {
+        Title = "Keep Giant / Oversized Animals (Size > 1)",
+        Default = true,
+        Callback = function(v)
+            tfa.SellKeepGiant = v
+        end,
+    })
+
+    SellSec:AddToggle("TFASellKeepNewIndex", {
+        Title = "Keep Undiscovered Index Animals",
+        Default = true,
+        Callback = function(v)
+            tfa.SellKeepNewIndex = v
+        end,
+    })
+
+    SellSec:AddToggle("TFASellKeepBetterBest", {
+        Title = "Keep Plot Upgrades / Beats Best Income",
+        Description = "ไม่ขายสัตว์ที่แข็งแกร่งกว่าสัตว์ที่ดีที่สุดในปัจจุบันหรือสัตว์ที่อ่อนที่สุดที่วางอยู่",
+        Default = true,
+        Callback = function(v)
+            tfa.SellKeepBetterBest = v
+        end,
+    })
+
+    SellSec:AddButton({
+        Title = "Run Filtered Sell Once",
+        ButtonText = "Sell Filtered",
+        Style = "Destructive",
+        Callback = function()
+            local cnt = DoFilteredSell(false)
+            if cnt == 0 then
+                Window:Toast("Auto Sell", { Detail = "No backpack animals matched sell criteria." })
+            end
+        end,
+    })
+
+    --------------------------------------------------------------------------
+    -- ESP & VISUALS TAB
+    --------------------------------------------------------------------------
+    local ESPSec = Tabs.Visuals:AddSection({
+        Title = "Animal ESP & Server Plot Scanner",
+        Icon = "radar",
+    })
+
+    ESPSec:AddToggle("TFAAnimalESP", {
+        Title = "Animal ESP (Plot Highlights & Labels)",
+        Description = "แสดงป้ายลอยและเส้นขอบบนสัตว์ที่ตรงเงื่อนไขในทุกแปลง",
+        Default = false,
+        Callback = function(v)
+            tfa.AnimalESP = v
+        end,
+    })
+
+    ESPSec:AddDropdown("TFAESPRarityFilter", {
+        Title = "ESP Rarity Filter",
+        Values = espRarityChoices,
+        Multi = true,
+        AllowNull = true,
+        Default = { "Legendary", "Mythic", "Secret", "Divine", "Celestial", "Eternal", "Cosmic", "Supreme", "Sovereign" },
+        Callback = function(v)
+            tfa.ESPRarityFilter = v
+        end,
+    })
+
+    ESPSec:AddToggle("TFAESPOnlyMutated", {
+        Title = "ESP Mutated Only",
+        Default = false,
+        Callback = function(v)
+            tfa.ESPOnlyMutated = v
+        end,
+    })
+
+    ESPSec:AddToggle("TFAESPExcludeOwnPlot", {
+        Title = "ESP Exclude My Plot",
+        Default = false,
+        Callback = function(v)
+            tfa.ESPExcludeOwnPlot = v
+        end,
+    })
+
+    ESPSec:AddSlider("TFAESPMaxDistance", {
+        Title = "ESP Max Distance",
+        Min = 50,
+        Max = 2000,
+        Default = 600,
+        Increment = 50,
+        Suffix = " studs",
+        Callback = function(v)
+            tfa.ESPMaxDistance = v
+        end,
+    })
+
+    local PlotTable = ESPSec:AddTable({
+        Title = "Server Plots Leaderboard (Click Row to Teleport)",
+        Columns = {
+            { Title = "Plot", Width = 0.5 },
+            { Title = "Owner", Width = 1.4 },
+            { Title = "Best Animal", Width = 1.7 },
+            { Title = "Top $/s", Width = 1.0, Align = "Right" },
+            { Title = "Total $/s", Width = 1.0, Align = "Right" },
+        },
+        MaxRows = 6,
+        Callback = function(row)
+            if row and row.PlotPart and GameConfig then
+                local dest = row.PlotPart.Position + GameConfig.Plot.EntranceOffset
+                SafePivot(CFrame.lookAt(dest, dest + Vector3.new(0, 0, 1)))
+            end
+        end,
+    })
+
+    local function RefreshPlotTable()
+        local plots = workspace:FindFirstChild("Plots")
+        if not plots then return end
+        local rows = {}
+        for _, p in ipairs(plots:GetChildren()) do
+            local uid = p:GetAttribute("OwnerUserId") or 0
+            local ownerName = "Empty"
+            if uid > 0 then
+                local plr = game:GetService("Players"):GetPlayerByUserId(uid)
+                ownerName = plr and plr.DisplayName or ("User_" .. tostring(uid))
+            end
+            local bestInc = 0
+            local totalInc = 0
+            local bestName = "-"
+            local animalsFolder = p:FindFirstChild("Animals")
+            if animalsFolder then
+                for _, a in ipairs(animalsFolder:GetChildren()) do
+                    local inc = tonumber(a:GetAttribute("Income")) or 0
+                    totalInc = totalInc + inc
+                    if inc >= bestInc and inc > 0 then
+                        bestInc = inc
+                        local mut = a:GetAttribute("Mutation")
+                        local disp = a:GetAttribute("DisplayName") or a.Name
+                        bestName = (mut and ("[" .. mut .. "] ") or "") .. disp
+                    end
+                end
+            end
+            if uid > 0 or totalInc > 0 then
+                table.insert(rows, {
+                    p.Name,
+                    ownerName,
+                    bestName,
+                    FmtRate(bestInc),
+                    FmtRate(totalInc),
+                    PlotPart = p,
+                    _sort = totalInc,
+                })
+            end
+        end
+        table.sort(rows, function(a, b) return a._sort > b._sort end)
+        RestoreCap()
+        PlotTable:SetRows(rows)
+    end
+
+    ESPSec:AddButton({
+        Title = "Refresh Server Plot Scanner",
+        ButtonText = "Scan Server",
+        Style = "Primary",
+        Callback = RefreshPlotTable,
+    })
+
+    ESPSec:AddToggle("TFAAutoRefreshPlots", {
+        Title = "Auto Refresh Plot Leaderboard (5s)",
+        Default = true,
+        Callback = function(v)
+            tfa.AutoRefreshPlots = v
+        end,
+    })
+
+    local WorldSec = Tabs.Visuals:AddSection({
+        Title = "World & Visual Utilities",
+        Icon = "sun",
+    })
+
+    WorldSec:AddToggle("TFALandingPreview", {
+        Title = "Throw Landing Preview Marker",
+        Description = "วาดวงแหวนนีออนเรืองแสง ณ ตำแหน่งไบโอมที่การโยนครั้งถัดไปจะตกลงพอดี",
+        Default = false,
+        Callback = function(v)
+            tfa.LandingPreview = v
+        end,
+    })
+
+    WorldSec:AddToggle("TFAHideOtherPets", {
+        Title = "Hide Other Players' Plot Animals",
+        Description = "ซ่อนสัตว์ที่วางอยู่ของผู้เล่นอื่นเฉพาะฝั่งเครื่องคุณ เพื่อให้ FPS ดีขึ้นและมองเห็นโล่งขึ้น",
+        Default = false,
+        Callback = function(v)
+            tfa.HideOtherPets = v
+        end,
+    })
+
+    WorldSec:AddToggle("TFARemoveFog", {
+        Title = "Remove Biome Fog / Haze",
+        Description = "ล้างหมอกของ Lighting และความหนาแน่น Atmosphere ในไบโอมระยะไกล",
+        Default = false,
+        Callback = function(v)
+            tfa.RemoveFog = v
+        end,
+    })
+
+    --------------------------------------------------------------------------
+    -- TELEPORTS TAB
+    --------------------------------------------------------------------------
+    local TPQuickSec = Tabs.Teleports:AddSection({
+        Title = "Plot & Hub Locations",
+        Icon = "navigation",
+    })
+
+    TPQuickSec:AddButton({
+        Title = "My Plot Entrance",
+        ButtonText = "Teleport",
+        Style = "Primary",
+        Callback = function()
+            local plot = GetMyPlotPart()
+            if plot and GameConfig then
+                local dest = plot.Position + GameConfig.Plot.EntranceOffset
+                SafePivot(CFrame.lookAt(dest, dest + Vector3.new(0, 0, 1)))
+            end
+        end,
+    })
+
+    TPQuickSec:AddButton({
+        Title = "Training Bar Spot",
+        ButtonText = "Teleport",
+        Callback = function()
+            local spot = GetTrainingSpotPos()
+            if spot then
+                local dest = spot + Vector3.new(0, 3, 0)
+                SafePivot(CFrame.new(dest))
+            end
+        end,
+    })
+
+    TPQuickSec:AddButton({
+        Title = "Food Shop Circle",
+        ButtonText = "Teleport",
+        Callback = function()
+            local plot = GetMyPlotPart()
+            if plot and GameConfig then
+                local dest = plot.Position + GameConfig.Plot.ShopCircleOffset + Vector3.new(0, 3, 0)
+                SafePivot(CFrame.new(dest))
+            end
+        end,
+    })
+
+    TPQuickSec:AddButton({
+        Title = "Fence Upgrade Sign",
+        ButtonText = "Teleport",
+        Callback = function()
+            local plot = GetMyPlotPart()
+            if plot and FenceConfig then
+                local dest = plot.Position + FenceConfig.SignOffset + Vector3.new(0, 3, -3)
+                SafePivot(CFrame.new(dest))
+            end
+        end,
+    })
+
+    TPQuickSec:AddButton({
+        Title = "Sell Shop Circle",
+        ButtonText = "Teleport",
+        Callback = function()
+            local sp = workspace:FindFirstChild("SellPlace")
+            if sp then
+                local dest = sp:GetPivot().Position + Vector3.new(0, 3, 0)
+                SafePivot(CFrame.new(dest))
+            end
+        end,
+    })
+
+    TPQuickSec:AddButton({
+        Title = "Starter Throw Line",
+        ButtonText = "Teleport",
+        Callback = function()
+            local pos = GetStarterThrowPos()
+            if pos then
+                SafePivot(CFrame.lookAt(pos, pos + Vector3.new(0, 0, -1)))
+            end
+        end,
+    })
+
+    local TPBiomeSec = Tabs.Teleports:AddSection({
+        Title = "Biomes & Areas (1 - 19)",
+        Icon = "compass",
+    })
+
+    TPBiomeSec:AddDropdown("TFASelectedTeleportArea", {
+        Title = "Choose Biome",
+        Values = tpAreaValues,
+        Default = tpAreaValues[1],
+        Searchable = true,
+        Callback = function(v)
+            tfa.SelectedTeleportArea = v
+        end,
+    })
+
+    TPBiomeSec:AddButton({
+        Title = "Teleport to Selected Biome",
+        ButtonText = "Go to Biome",
+        Style = "Primary",
+        Callback = function()
+            local idx = tpAreaIndexByLabel[tfa.SelectedTeleportArea]
+            if idx and AreaUtil then
+                local info = AreaUtil.Get(idx)
+                if info then
+                    local dest = Vector3.new(info.Center.X, info.FloorY + 4, info.ZStart - 16)
+                    SafePivot(CFrame.lookAt(dest, dest + Vector3.new(0, 0, -1)))
+                end
+            end
+        end,
+    })
+
+    local TPPlayerSec = Tabs.Teleports:AddSection({
+        Title = "Player Plots",
+        Icon = "users",
+    })
+
+    TPPlayerSec:AddDropdown("TFASelectedTeleportPlayer", {
+        Title = "Choose Player",
+        Values = "Players",
+        ExcludeLocal = false,
+        Callback = function(v)
+            tfa.SelectedTeleportPlayer = v
+        end,
+    })
+
+    TPPlayerSec:AddButton({
+        Title = "Teleport to Player's Plot",
+        ButtonText = "Visit Plot",
+        Callback = function()
+            local name = tfa.SelectedTeleportPlayer
+            local plr = name and game:GetService("Players"):FindFirstChild(name)
+            local plotIdx = plr and plr:GetAttribute("PlotIndex")
+            local plots = workspace:FindFirstChild("Plots")
+            local plot = plotIdx and plots and plots:FindFirstChild(tostring(plotIdx))
+            if plot and GameConfig then
+                local dest = plot.Position + GameConfig.Plot.EntranceOffset
+                SafePivot(CFrame.lookAt(dest, dest + Vector3.new(0, 0, 1)))
+            else
+                Window:Toast("Teleport", { Detail = "Selected player plot not found." })
+            end
+        end,
+    })
+
+    --------------------------------------------------------------------------
+    -- HOOKS (ThrowMeter, RevealSequence, SuperThrow, RingRushSteering/Flight)
+    --------------------------------------------------------------------------
+    local origThrowMeterRun, origTestAutoTap
+    if ThrowMeter then
+        origThrowMeterRun = ThrowMeter.Run
+        origTestAutoTap = ThrowMeter.TestAutoTap
+        ThrowMeter.Run = function(self, ...)
+            if alive and tfa.ManualAlwaysPerfect and ThrowMeterMath then
+                self:SetLocked(true)
+                ThrowMeter.TestAutoTap = ThrowMeterMath.HalfPeriod()
+            else
+                ThrowMeter.TestAutoTap = origTestAutoTap
+            end
+            return origThrowMeterRun(self, ...)
+        end
+    end
+
+    local origRevealRun
+    if RevealSequence then
+        origRevealRun = RevealSequence.Run
+        RevealSequence.Run = function(...)
+            if alive and tfa.SkipRevealCutscene then
+                return nil
+            end
+            return origRevealRun(...)
+        end
+    end
+
+    local origSuperBegin
+    if SuperThrow then
+        origSuperBegin = SuperThrow.Begin
+        SuperThrow.Begin = function(params, ...)
+            local obj = origSuperBegin(params, ...)
+            if alive and tfa.ManualLuckyAutoUse and obj and obj.SavedMode and obj.UseSaved then
+                task.defer(function()
+                    if alive and not obj.Dead then
+                        pcall(obj.UseSaved, obj)
+                    end
+                end)
+            end
+            return obj
+        end
+    end
+
+    local activeRingRush = nil
+    local origRRRunAsync, origRRStep
+    if RingRushFlight and RingRushCourse then
+        origRRRunAsync = RingRushFlight.RunAsync
+        RingRushFlight.RunAsync = function(params, ...)
+            if type(params) == "table" and params.Begin and params.Begin.Seed and params.Launch then
+                activeRingRush = {
+                    Course = RingRushCourse.new(params.Begin.Seed, params.Launch),
+                    Food = params.Food,
+                    Launch = params.Launch,
+                    StartTime = os.clock(),
+                    NextRing = 1,
+                }
+            end
+            local ok, a, b = pcall(origRRRunAsync, params, ...)
+            activeRingRush = nil
+            if not ok then error(a) end
+            return a, b
+        end
+    end
+
+    if RingRushSteering then
+        origRRStep = RingRushSteering.Step
+        RingRushSteering.Step = function(self, frame, scale, ...)
+            if alive and tfa.RingRushAutoSteer and activeRingRush and activeRingRush.Course then
+                local course = activeRingRush.Course
+                local food = activeRingRush.Food
+                local elapsed = os.clock() - activeRingRush.StartTime
+                local dist = activeRingRush.NextRing > 1 and course:GetRingDistance(activeRingRush.NextRing - 1) or 0
+                if food and food.Parent then
+                    dist = math.max(0, course.Start.Z - food:GetPivot().Position.Z)
+                end
+                while dist >= course:GetRingDistance(activeRingRush.NextRing) do
+                    activeRingRush.NextRing = activeRingRush.NextRing + 1
+                end
+                local ring = course:GetRing(activeRingRush.NextRing)
+                local target = course:GetRingOffset(ring, elapsed)
+
+                -- Check mobs between current and next ring to dodge cleanly
+                local mobs = course:GetMobs(math.max(1, activeRingRush.NextRing - 1))
+                for _, mob in ipairs(mobs) do
+                    if mob.Distance >= dist - 2 and mob.Distance <= dist + 42 then
+                        local mobOff = course:GetMobOffset(mob, elapsed)
+                        local delta = target - mobOff
+                        if delta.Magnitude < 4.8 then
+                            local push = delta.Magnitude > 0.05 and delta.Unit or Vector2.new(1, 0)
+                            target = mobOff + push * 5.2
+                            local maxOff = RingRushConfig and RingRushConfig.Course.MaxOffset or 26
+                            if target.Magnitude > maxOff then
+                                target = target.Unit * maxOff
+                            end
+                        end
+                    end
+                end
+
+                self.Scheme = "Mouse"
+                self.Goal = target
+                local dt = (type(frame) == "table" and frame.DeltaTime) or 0.016
+                self.SpringX:Step(target.X, 0, dt)
+                self.SpringY:Step(target.Y, 0, dt)
+                return
+            end
+            return origRRStep(self, frame, scale, ...)
+        end
+    end
+
+    --------------------------------------------------------------------------
+    -- EVENT LISTENERS (Tap Bonus, Anti-AFK, Level/Animal Observers)
+    --------------------------------------------------------------------------
+    if Remotes then
+        local okEv, bonusEv = pcall(Remotes.Event, "Training_Bonus")
+        RestoreCap()
+        if okEv and bonusEv then
+            TrackConn(bonusEv.OnClientEvent, function(bonusId)
+                if alive and tfa.AutoTapBonus and bonusId ~= nil then
+                    task.spawn(function()
+                        InvokeRemote("Training_TapBonus", bonusId)
+                    end)
+                end
+            end)
+        end
+    end
+
+    if VirtualUser then
+        TrackConn(LocalPlayer.Idled, function()
+            if alive and tfa.AntiAFK then
+                pcall(function()
+                    VirtualUser:CaptureController()
+                    VirtualUser:ClickButton2(Vector2.zero)
+                end)
+            end
+        end)
+    end
+
+    --------------------------------------------------------------------------
+    -- VISUAL MANAGERS (ESP, Landing Preview, Fog, Hide Pets)
+    --------------------------------------------------------------------------
+    local espFolder = Instance.new("Folder")
+    espFolder.Name = "ZeroX_TFA_ESP"
+    espFolder.Parent = LocalPlayer:WaitForChild("PlayerGui")
+    local espEntries = {} -- [model] = { Billboard, Highlight }
+
+    local function ClearESP()
+        for model, entry in pairs(espEntries) do
+            if entry.Billboard then entry.Billboard:Destroy() end
+            if entry.Highlight then entry.Highlight:Destroy() end
+            espEntries[model] = nil
+        end
+    end
+
+    local function UpdateESP()
+        if not tfa.AnimalESP then
+            if next(espEntries) ~= nil then
+                ClearESP()
+            end
+            return
+        end
+
+        local _, _, hrp = GetCharParts()
+        local myPos = hrp and hrp.Position
+        local myPlotIdx = LocalPlayer:GetAttribute("PlotIndex")
+        local rarityFilter = tfa.ESPRarityFilter or {}
+        local seen = {}
+
+        local plots = workspace:FindFirstChild("Plots")
+        if plots then
+            for _, plot in ipairs(plots:GetChildren()) do
+                local isMyPlot = myPlotIdx and tostring(myPlotIdx) == plot.Name
+                if not (tfa.ESPExcludeOwnPlot and isMyPlot) then
+                    local animalsFolder = plot:FindFirstChild("Animals")
+                    if animalsFolder then
+                        for _, model in ipairs(animalsFolder:GetChildren()) do
+                            if model:IsA("Model") and model.Parent then
+                                local rarity = model:GetAttribute("Rarity") or "Common"
+                                local mut = model:GetAttribute("Mutation")
+                                local inc = tonumber(model:GetAttribute("Income")) or 0
+                                local pos = model:GetPivot().Position
+                                local dist = myPos and (pos - myPos).Magnitude or 0
+                                local passesRarity = (next(rarityFilter) == nil) or (rarityFilter[rarity] == true)
+                                local passesMut = (not tfa.ESPOnlyMutated) or (mut ~= nil and mut ~= "")
+                                local passesDist = dist <= (tfa.ESPMaxDistance or 600)
+
+                                if passesRarity and passesMut and passesDist then
+                                    seen[model] = true
+                                    local entry = espEntries[model]
+                                    if not entry then
+                                        local color = (RarityConfig and RarityConfig.Get(rarity).Color) or Color3.fromRGB(255, 220, 90)
+                                        local hl = Instance.new("Highlight")
+                                        hl.Name = "ZeroX_HL"
+                                        hl.Adornee = model
+                                        hl.FillColor = color
+                                        hl.OutlineColor = Color3.new(1, 1, 1)
+                                        hl.FillTransparency = 0.72
+                                        hl.OutlineTransparency = 0.15
+                                        hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+                                        hl.Parent = espFolder
+
+                                        local bb = Instance.new("BillboardGui")
+                                        bb.Name = "ZeroX_BB"
+                                        bb.Adornee = model.PrimaryPart or model:FindFirstChildWhichIsA("BasePart")
+                                        bb.Size = UDim2.fromOffset(180, 44)
+                                        bb.StudsOffsetWorldSpace = Vector3.new(0, 4, 0)
+                                        bb.AlwaysOnTop = true
+                                        bb.MaxDistance = tfa.ESPMaxDistance or 600
+                                        bb.Parent = espFolder
+
+                                        local lbl = Instance.new("TextLabel")
+                                        lbl.Size = UDim2.fromScale(1, 1)
+                                        lbl.BackgroundTransparency = 1
+                                        lbl.Font = Enum.Font.GothamBold
+                                        lbl.TextSize = 13
+                                        lbl.TextColor3 = color
+                                        lbl.TextStrokeTransparency = 0.25
+                                        lbl.TextStrokeColor3 = Color3.new(0, 0, 0)
+                                        local disp = model:GetAttribute("DisplayName") or model.Name
+                                        local mutTag = (mut and mut ~= "") and ("[" .. mut .. "] ") or ""
+                                        lbl.Text = string.format("%s%s\n%s | %s", mutTag, disp, rarity, FmtRate(inc))
+                                        lbl.Parent = bb
+
+                                        espEntries[model] = { Highlight = hl, Billboard = bb }
+                                    else
+                                        entry.Billboard.MaxDistance = tfa.ESPMaxDistance or 600
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+
+        for model, entry in pairs(espEntries) do
+            if not seen[model] or not model.Parent then
+                if entry.Billboard then entry.Billboard:Destroy() end
+                if entry.Highlight then entry.Highlight:Destroy() end
+                espEntries[model] = nil
+            end
+        end
+    end
+
+    local previewPart
+    local function DestroyPreview()
+        if previewPart then
+            previewPart:Destroy()
+            previewPart = nil
+        end
+    end
+
+    local function UpdateLandingPreview()
+        if not tfa.LandingPreview or not AreaUtil or not LevelConfig or not DataController or not DataController:IsReady() then
+            DestroyPreview()
+            return
+        end
+        if not previewPart then
+            previewPart = Instance.new("Part")
+            previewPart.Name = "ZeroX_LandingPreview"
+            previewPart.Shape = Enum.PartType.Cylinder
+            previewPart.Anchored = true
+            previewPart.CanCollide = false
+            previewPart.CanQuery = false
+            previewPart.CanTouch = false
+            previewPart.Material = Enum.Material.Neon
+            previewPart.Color = Color3.fromRGB(0, 210, 255)
+            previewPart.Transparency = 0.45
+            previewPart.Size = Vector3.new(0.25, 14, 14)
+            previewPart.Parent = workspace
+        end
+        local lvl = GetDataVal("Level", 1)
+        local effPower = LevelConfig.EffectiveThrowPower(lvl, GetDataVal("ThrowPower", 0))
+        if tfa.PerfectMeter and GameConfig then
+            effPower = effPower + (GameConfig.Throw.MeterBonusStuds or 20)
+        end
+        local pos = AreaUtil.ComputeLanding(effPower, 0)
+        previewPart.CFrame = CFrame.new(pos + Vector3.new(0, 0.25, 0)) * CFrame.Angles(0, 0, math.rad(90))
+    end
+
+    local hiddenPetParts = {}
+    local function RestoreHiddenPets()
+        for part, _ in pairs(hiddenPetParts) do
+            pcall(function()
+                if part and part.Parent then
+                    part.LocalTransparencyModifier = 0
+                end
+            end)
+            hiddenPetParts[part] = nil
+        end
+    end
+
+    local function UpdateHideOtherPets()
+        if not tfa.HideOtherPets then
+            if next(hiddenPetParts) ~= nil then
+                RestoreHiddenPets()
+            end
+            return
+        end
+        for _, model in ipairs(CollectionService:GetTagged("PlotAnimal")) do
+            if model:GetAttribute("OwnerUserId") ~= LocalPlayer.UserId then
+                for _, desc in ipairs(model:GetDescendants()) do
+                    if desc:IsA("BasePart") then
+                        hiddenPetParts[desc] = true
+                        desc.LocalTransparencyModifier = 1
+                    end
+                end
+            end
+        end
+    end
+
+    local fogSaved = nil
+    local function RestoreFog()
+        if not fogSaved then return end
+        pcall(function()
+            Lighting.FogStart = fogSaved.FogStart
+            Lighting.FogEnd = fogSaved.FogEnd
+            for atmo, vals in pairs(fogSaved.Atmos) do
+                if atmo and atmo.Parent then
+                    atmo.Density = vals.Density
+                    atmo.Glare = vals.Glare
+                    atmo.Haze = vals.Haze
+                end
+            end
+        end)
+        fogSaved = nil
+    end
+
+    local function UpdateFog()
+        if not tfa.RemoveFog then
+            RestoreFog()
+            return
+        end
+        if not fogSaved then
+            fogSaved = {
+                FogStart = Lighting.FogStart,
+                FogEnd = Lighting.FogEnd,
+                Atmos = {},
+            }
+            for _, child in ipairs(Lighting:GetChildren()) do
+                if child:IsA("Atmosphere") then
+                    fogSaved.Atmos[child] = {
+                        Density = child.Density,
+                        Glare = child.Glare,
+                        Haze = child.Haze,
+                    }
+                end
+            end
+        end
+        Lighting.FogStart = 1e6
+        Lighting.FogEnd = 1e7
+        for _, child in ipairs(Lighting:GetChildren()) do
+            if child:IsA("Atmosphere") then
+                child.Density = 0
+                child.Glare = 0
+                child.Haze = 0
+            end
+        end
+    end
+
+    --------------------------------------------------------------------------
+    -- BACKGROUND LOOPS (Cleanly Managed, Non-Overlapping)
+    --------------------------------------------------------------------------
+    -- 1. Farm Loop (Hybrid / AutoThrow / AutoTrain)
+    task.spawn(function()
+        while alive do
+            if not GetDataReady() then
+                task.wait(0.25)
+            elseif tfa.HybridFarm then
+                -- Train phase
+                if DoStartSilentTrain() then
+                    local tEnd = os.clock() + tfa.HybridTrainSec
+                    while alive and tfa.HybridFarm and os.clock() < tEnd do
+                        if LocalPlayer:GetAttribute("Training") ~= true then
+                            DoStartSilentTrain()
+                        end
+                        task.wait(0.35)
+                    end
+                end
+                EnsureNotTraining()
+                RunPostCatchMaintenance()
+
+                -- Throw phase
+                for _ = 1, tfa.HybridThrowCount do
+                    if not alive or not tfa.HybridFarm then break end
+                    if tfa.ThrowMode == "Silent Instant (No Cutscene)" then
+                        DoSilentThrowOnce()
+                    else
+                        DoLegitWalkThrowOnce()
+                    end
+                    task.wait(math.max(0.05, tfa.ThrowDelay))
+                end
+                RunPostCatchMaintenance()
+            elseif tfa.AutoThrow then
+                if tfa.ThrowMode == "Silent Instant (No Cutscene)" then
+                    DoSilentThrowOnce()
+                else
+                    DoLegitWalkThrowOnce()
+                end
+                task.wait(math.max(0.05, tfa.ThrowDelay))
+            elseif tfa.AutoTrain then
+                if LocalPlayer:GetAttribute("Training") ~= true then
+                    DoStartSilentTrain()
+                end
+                task.wait(0.4)
+            else
+                task.wait(0.2)
+            end
+        end
+    end)
+
+    -- 2. Slow Maintenance Loop (Upgrades, Events, Offline, Free, Anti-AFK)
+    local lastVotedRun = -1
+    local lastAntiAfk = 0
+    task.spawn(function()
+        while alive do
+            if GetDataReady() then
+                if tfa.AutoUpgradeStand then DoUpgradeStand(true) end
+                if tfa.AutoUpgradeFence then DoUpgradeFence(true) end
+                if tfa.AutoBuyFood or tfa.AutoEquipBestFood then DoBuyBestFood(true) end
+                if tfa.AutoPlaceEggs then DoHatchAllEggs(3, true) end
+                if tfa.AutoSellFiltered and not (tfa.AutoThrow or tfa.HybridFarm) then
+                    DoFilteredSell(true)
+                end
+
+                if tfa.AutoClaimOffline then
+                    local pendingBase = tonumber(DataController:GetPath("OfflinePending.Base")) or 0
+                    if pendingBase > 0 then
+                        InvokeRemote("Offline_Claim")
+                    end
+                end
+
+                if tfa.AutoClaimFree and DataController:Get("FreeAnimalClaimed") ~= true then
+                    InvokeRemote("Shop_ClaimFree")
+                end
+
+                if tfa.AutoVoteMap and AdminAbuse then
+                    local st = AdminAbuse.Current()
+                    local runId = AdminAbuse.Run()
+                    if st and st.VoteOpen and lastVotedRun ~= runId then
+                        local choiceIdx = voteIndexByLabel[tfa.VoteMapChoice] or 1
+                        FireEvent("AdminAbuse_Vote", choiceIdx)
+                        lastVotedRun = runId
+                    end
+                end
+
+                if tfa.AntiAFK and VirtualUser and (os.clock() - lastAntiAfk >= 60) then
+                    lastAntiAfk = os.clock()
+                    pcall(function()
+                        VirtualUser:CaptureController()
+                        VirtualUser:ClickButton2(Vector2.zero)
+                    end)
+                end
+            end
+            task.wait(1.25)
+        end
+    end)
+
+    -- 3. Dashboard & Visual Refresh Loop (1Hz)
+    task.spawn(function()
+        while alive do
+            if DataController and DataController:IsReady() then
+                local money = GetDataVal("Money", 0)
+                local rate = LocalPlayer:GetAttribute("IncomeRate") or 0
+                local lvl = GetDataVal("Level", 1)
+                local xp = GetDataVal("Xp", 0)
+                local maxXp = BalanceCurve and BalanceCurve.GetXpForLevel(LocalPlayer, lvl) or 1
+                RestoreCap()
+                local power = LevelConfig and LevelConfig.EffectiveThrowPower(lvl, GetDataVal("ThrowPower", 0)) or 0
+                local maxArea = (AreaUtil and AreasConfig) and AreasConfig.Get(AreaUtil.MaxReachableArea(power + 20)) or nil
+                RestoreCap()
+
+                lblCash:SetValue(string.format("%s (%s)", FmtMoney(money), FmtRate(rate)))
+                lblLevel:SetValue(string.format("Lv.%d (%s/%s XP) | Pwr %s -> %s", lvl, FmtNum(xp), FmtNum(maxXp), FmtNum(power), maxArea and maxArea.Name or "?"))
+
+                local luckMult = LuckOdds and LuckOdds.GetLuckNow() or 1
+                RestoreCap()
+                local cashMult = LocalPlayer:GetAttribute("CashMultiplier") or 1
+                local xpMult = LocalPlayer:GetAttribute("XpMultiplier") or 1
+                lblLuck:SetValue(string.format("Luck x%s | Cash x%s | XP x%s", tostring(luckMult), tostring(cashMult), tostring(xpMult)))
+
+                local superCount = GetDataVal("SuperThrows", 0)
+                local eggTotal = 0
+                for _, cnt in pairs(GetDataVal("Eggs", {})) do
+                    eggTotal = eggTotal + (tonumber(cnt) or 0)
+                end
+                local unlockedIdx = 0
+                for _, okIdx in pairs(GetDataVal("Index", {})) do
+                    if okIdx == true then unlockedIdx = unlockedIdx + 1 end
+                end
+                lblResources:SetValue(string.format("Super Throws: %d | Eggs: %d | Stand #%d | Fence Lv.%d", superCount, eggTotal, GetDataVal("Stand", 0), GetDataVal("FenceLevel", 0)))
+                lblIndex:SetValue(string.format("%d / %d animals unlocked", unlockedIdx, TotalAnimalCount))
+                lblSession:SetValue(string.format("%d caught | %d sold (%s)", session.Caught, session.SoldCount, FmtMoney(session.SoldMoney)))
+                lblBestCatch:SetContent(session.BestSummary)
+            end
+
+            if tfa.AutoRefreshPlots ~= false and (os.clock() - (session._lastPlotScan or 0) >= 5) then
+                session._lastPlotScan = os.clock()
+                pcall(RefreshPlotTable)
+            end
+
+            pcall(UpdateESP)
+            pcall(UpdateLandingPreview)
+            pcall(UpdateHideOtherPets)
+            pcall(UpdateFog)
+
+            task.wait(0.5)
+        end
+    end)
+
+    task.defer(function()
+        if GetDataReady() then
+            RefreshPlotTable()
+        end
+    end)
+
+    --------------------------------------------------------------------------
+    -- CLEANUP ON UNLOAD
+    --------------------------------------------------------------------------
+    MacUI:OnUnload(function()
+        alive = false
+        for _, c in ipairs(hubConns) do
+            pcall(function() c:Disconnect() end)
+        end
+        table.clear(hubConns)
+
+        if ThrowMeter and origThrowMeterRun then
+            ThrowMeter.Run = origThrowMeterRun
+            ThrowMeter.TestAutoTap = origTestAutoTap
+        end
+        if RevealSequence and origRevealRun then
+            RevealSequence.Run = origRevealRun
+        end
+        if SuperThrow and origSuperBegin then
+            SuperThrow.Begin = origSuperBegin
+        end
+        if RingRushFlight and origRRRunAsync then
+            RingRushFlight.RunAsync = origRRRunAsync
+        end
+        if RingRushSteering and origRRStep then
+            RingRushSteering.Step = origRRStep
+        end
+
+        pcall(EnsureNotTraining)
+        ClearESP()
+        if espFolder then espFolder:Destroy() end
+        DestroyPreview()
+        RestoreHiddenPets()
+        RestoreFog()
+    end)
+
+    RestoreCap()
+end
+
+Tabs.Home:Select()
+
+--------------------------------------------------------------------------------
+-- PLAYER: Client utilities
+--------------------------------------------------------------------------------
+do
+    local RunService = game:GetService("RunService")
+    local UIS = game:GetService("UserInputService")
+    local Lighting = game:GetService("Lighting")
+    local PromptService = game:GetService("ProximityPromptService")
+    local TeleportService = game:GetService("TeleportService")
+    local GuiService = game:GetService("GuiService")
+
+    local state = {
+        WalkSpeed = false,
+        Speed = 32,
+        InfiniteJump = false,
+        Noclip = false,
+        InstantPrompt = false,
+        Fly = false,
+        FlySpeed = 60,
+        FPSBoost = false,
+        UltraFPSBoost = false,
+        DisableAnimations = false,
+        Reconnect = false,
+    }
+
+    local alive = true
+    local connections = {}
+    local motionConnection
+    local flight
+    local watchedAnimator
+    local animationConnection
+    local reconnecting = false
+    local reconnectToken = 0
+    local renderDisabled = false
+    local performanceVersion = 0
+
+    local function WeakKeys()
+        return setmetatable({}, { __mode = "k" })
+    end
+
+    local speedSaved = WeakKeys()
+    local collisionSaved = WeakKeys()
+    local promptSaved = WeakKeys()
+    local animationSaved = WeakKeys()
+    local performanceSaved = WeakKeys()
+
+    local function Connect(signal, callback)
+        local connection = signal:Connect(callback)
+        table.insert(connections, connection)
+        return connection
+    end
+
+    local function Report(message)
+        warn("[Zero X / Player] " .. tostring(message))
+        if alive and not MacUI.Unloaded then
+            Window:Toast("Player", {
+                Detail = tostring(message),
+                Icon = "info",
+            })
+        end
+    end
+
+    -- เก็บค่าก่อนแก้ และคืนเฉพาะค่าที่ยังตรงกับที่ระบบนี้เขียนไว้
+    local function Patch(bag, object, property, value)
+        if not object then return end
+
+        local ok, current = pcall(function()
+            return object[property]
+        end)
+        if not ok then return end
+
+        local properties = bag[object]
+        local record = properties and properties[property]
+
+        if current == value then
+            if record then record.Applied = value end
+            return
+        end
+
+        local written = pcall(function()
+            object[property] = value
+        end)
+        if not written then return end
+
+        if not properties then
+            properties = {}
+            bag[object] = properties
+        end
+
+        if not record then
+            record = { Original = current }
+            properties[property] = record
+        end
+        record.Applied = value
+    end
+
+    local function Restore(bag)
+        for object, properties in pairs(bag) do
+            for property, record in pairs(properties) do
+                pcall(function()
+                    if object[property] == record.Applied then
+                        object[property] = record.Original
+                    end
+                end)
+            end
+            bag[object] = nil
+        end
+    end
+
+    local function GetCharacter()
+        local character = LocalPlayer.Character
+        local humanoid = character
+            and character:FindFirstChildOfClass("Humanoid")
+        local root = humanoid and humanoid.RootPart
+        return character, humanoid, root
+    end
+
+    --------------------------------------------------------------------------
+    -- Fly: WASD / Space ขึ้น / LeftControl ลง
+    --------------------------------------------------------------------------
+    local function StopFlight()
+        if not flight then return end
+
+        local old = flight
+        flight = nil
+
+        old.Velocity:Destroy()
+        old.Orientation:Destroy()
+        old.Attachment:Destroy()
+
+        pcall(function()
+            if old.Humanoid.AutoRotate == false then
+                old.Humanoid.AutoRotate = old.AutoRotate
+            end
+        end)
+    end
+
+    local function StartFlight(humanoid, root)
+        StopFlight()
+
+        local attachment = Instance.new("Attachment")
+        attachment.Name = "ZeroXFlightAttachment"
+        attachment.Parent = root
+
+        local velocity = Instance.new("LinearVelocity")
+        velocity.Name = "ZeroXFlightVelocity"
+        velocity.Attachment0 = attachment
+        velocity.RelativeTo = Enum.ActuatorRelativeTo.World
+        velocity.VelocityConstraintMode = Enum.VelocityConstraintMode.Vector
+        velocity.ForceLimitsEnabled = false
+        velocity.VectorVelocity = Vector3.zero
+        velocity.Parent = root
+
+        local orientation = Instance.new("AlignOrientation")
+        orientation.Name = "ZeroXFlightOrientation"
+        orientation.Mode = Enum.OrientationAlignmentMode.OneAttachment
+        orientation.Attachment0 = attachment
+        orientation.MaxTorque = math.huge
+        orientation.Responsiveness = 20
+        orientation.CFrame = root.CFrame.Rotation
+        orientation.Parent = root
+
+        flight = {
+            Root = root,
+            Humanoid = humanoid,
+            AutoRotate = humanoid.AutoRotate,
+            Attachment = attachment,
+            Velocity = velocity,
+            Orientation = orientation,
+        }
+
+        humanoid.AutoRotate = false
+    end
+
+    --------------------------------------------------------------------------
+    -- Animations: หยุดเวลา Animation ของตัวละครเรา และคืนความเร็วเมื่อปิด
+    --------------------------------------------------------------------------
+    local function FreezeTrack(track)
+        if not alive or not state.DisableAnimations then return end
+
+        pcall(function()
+            if animationSaved[track] == nil then
+                animationSaved[track] = track.Speed
+            end
+            track:AdjustSpeed(0)
+        end)
+    end
+
+    local function ClearAnimations()
+        if animationConnection then
+            animationConnection:Disconnect()
+            animationConnection = nil
+        end
+
+        watchedAnimator = nil
+
+        for track, speed in pairs(animationSaved) do
+            pcall(function()
+                if track.IsPlaying and track.Speed == 0 then
+                    track:AdjustSpeed(speed)
+                end
+            end)
+            animationSaved[track] = nil
+        end
+    end
+
+    local function UpdateAnimator(humanoid)
+        local animator = humanoid
+            and humanoid:FindFirstChildOfClass("Animator")
+
+        if animator == watchedAnimator then return end
+
+        ClearAnimations()
+        watchedAnimator = animator
+
+        if animator then
+            animationConnection = animator.AnimationPlayed:Connect(FreezeTrack)
+
+            for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
+                FreezeTrack(track)
+            end
+        end
+    end
+
+    --------------------------------------------------------------------------
+    -- Movement: มี Connection เดียวเฉพาะตอนมีฟังก์ชันที่ต้องอัปเดต
+    --------------------------------------------------------------------------
+    local function UpdateMotion()
+        local needed = state.WalkSpeed or state.Noclip
+            or state.Fly or state.DisableAnimations
+
+        if not state.WalkSpeed then Restore(speedSaved) end
+        if not state.Noclip then Restore(collisionSaved) end
+        if not state.Fly then StopFlight() end
+        if not state.DisableAnimations then ClearAnimations() end
+
+        if not needed then
+            if motionConnection then
+                motionConnection:Disconnect()
+                motionConnection = nil
+            end
+            return
+        end
+
+        if motionConnection then return end
+
+        motionConnection = RunService.PreSimulation:Connect(function()
+            if not alive then return end
+
+            local character, humanoid, root = GetCharacter()
+
+            if state.DisableAnimations then
+                UpdateAnimator(humanoid)
+            end
+
+            if not humanoid or humanoid.Health <= 0 then
+                StopFlight()
+                return
+            end
+
+            if state.WalkSpeed then
+                Patch(speedSaved, humanoid, "WalkSpeed", state.Speed)
+            end
+
+            if state.Noclip and character then
+                for _, object in ipairs(character:GetDescendants()) do
+                    if object:IsA("BasePart") then
+                        Patch(collisionSaved, object, "CanCollide", false)
+                    end
+                end
+            end
+
+            if not state.Fly then return end
+
+            if not root or not root.Parent or root.Anchored then
+                StopFlight()
+                return
+            end
+
+            if not flight or flight.Root ~= root
+                or not flight.Velocity.Parent
+                or not flight.Orientation.Parent then
+                StartFlight(humanoid, root)
+            end
+
+            local camera = workspace.CurrentCamera
+            local direction = Vector3.zero
+
+            if camera and not UIS:GetFocusedTextBox() then
+                local cf = camera.CFrame
+
+                if UIS:IsKeyDown(Enum.KeyCode.W) then
+                    direction = direction + cf.LookVector
+                end
+                if UIS:IsKeyDown(Enum.KeyCode.S) then
+                    direction = direction - cf.LookVector
+                end
+                if UIS:IsKeyDown(Enum.KeyCode.D) then
+                    direction = direction + cf.RightVector
+                end
+                if UIS:IsKeyDown(Enum.KeyCode.A) then
+                    direction = direction - cf.RightVector
+                end
+                if UIS:IsKeyDown(Enum.KeyCode.Space) then
+                    direction = direction + Vector3.yAxis
+                end
+                if UIS:IsKeyDown(Enum.KeyCode.LeftControl) then
+                    direction = direction - Vector3.yAxis
+                end
+
+                flight.Orientation.CFrame = cf.Rotation
+            end
+
+            if direction.Magnitude > 1 then
+                direction = direction.Unit
+            end
+
+            flight.Velocity.VectorVelocity = direction * state.FlySpeed
+        end)
+    end
+
+    Connect(LocalPlayer.CharacterRemoving, function()
+        StopFlight()
+        ClearAnimations()
+        Restore(speedSaved)
+        Restore(collisionSaved)
+    end)
+
+    Connect(UIS.JumpRequest, function()
+        if not alive or not state.InfiniteJump
+            or state.Fly or UIS:GetFocusedTextBox() then
+            return
+        end
+
+        local _, humanoid = GetCharacter()
+        if humanoid and humanoid.Health > 0 then
+            humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+        end
+    end)
+
+    --------------------------------------------------------------------------
+    -- Instant Prompt: ปรับ HoldDuration ฝั่ง Client ไม่ส่ง Remote
+    --------------------------------------------------------------------------
+    Connect(PromptService.PromptShown, function(prompt)
+        if alive and state.InstantPrompt then
+            Patch(promptSaved, prompt, "HoldDuration", 0)
+        end
+    end)
+
+    local function ApplyPrompts()
+        if not state.InstantPrompt then
+            Restore(promptSaved)
+            return
+        end
+
+        for _, object in ipairs(workspace:GetDescendants()) do
+            if object:IsA("ProximityPrompt") then
+                Patch(promptSaved, object, "HoldDuration", 0)
+            end
+        end
+    end
+
+    --------------------------------------------------------------------------
+    -- Performance: FPS = เงา/แสง, Ultra = เพิ่ม Material/Texture
+    --------------------------------------------------------------------------
+    local function ApplyPerformanceObject(object)
+        if not (state.FPSBoost or state.UltraFPSBoost) then return end
+
+        if object:IsA("BasePart") then
+            Patch(performanceSaved, object, "CastShadow", false)
+
+            if state.UltraFPSBoost then
+                Patch(performanceSaved, object, "Material", Enum.Material.SmoothPlastic)
+                Patch(performanceSaved, object, "Reflectance", 0)
+
+                if object:IsA("MeshPart") then
+                    Patch(performanceSaved, object, "TextureID", "")
+                end
+            end
+        elseif object:IsA("Light") or object:IsA("PostEffect") then
+            Patch(performanceSaved, object, "Enabled", false)
+        elseif state.UltraFPSBoost then
+            if object:IsA("Decal") or object:IsA("Texture") then
+                Patch(performanceSaved, object, "Transparency", 1)
+            elseif object:IsA("SpecialMesh") then
+                Patch(performanceSaved, object, "TextureId", "")
+            end
+        end
+    end
+
+    local function ApplyPerformance()
+        performanceVersion = performanceVersion + 1
+        local version = performanceVersion
+
+        Restore(performanceSaved)
+
+        if not (state.FPSBoost or state.UltraFPSBoost) then return end
+
+        Patch(performanceSaved, Lighting, "GlobalShadows", false)
+
+        task.spawn(function()
+            for _, parent in ipairs({ workspace, Lighting }) do
+                for index, object in ipairs(parent:GetDescendants()) do
+                    if not alive or version ~= performanceVersion then return end
+
+                    ApplyPerformanceObject(object)
+
+                    if index % 300 == 0 then
+                        task.wait()
+                    end
+                end
+            end
+        end)
+    end
+
+    Connect(workspace.DescendantAdded, function(object)
+        if not alive then return end
+
+        ApplyPerformanceObject(object)
+
+        if state.InstantPrompt and object:IsA("ProximityPrompt") then
+            Patch(promptSaved, object, "HoldDuration", 0)
+        end
+    end)
+
+    Connect(Lighting.DescendantAdded, function(object)
+        if alive then ApplyPerformanceObject(object) end
+    end)
+
+    --------------------------------------------------------------------------
+    -- Reconnect: เฉพาะ Kick code 267, กลับ JobId เดิม สูงสุด 3 ครั้ง
+    --------------------------------------------------------------------------
+    local originalPlaceId = game.PlaceId
+    local originalJobId = game.JobId
+    local reconnectAvailable = false
+    local TryReconnect
+
+    TryReconnect = function(attempt, token)
+        if not alive or not state.Reconnect
+            or token ~= reconnectToken then
+            return
+        end
+
+        if attempt > 3 then
+            reconnecting = false
+            Report("กลับเซิร์ฟเวอร์เดิมไม่สำเร็จหลังลอง 3 ครั้ง")
+            return
+        end
+
+        local ok, err = pcall(function()
+            TeleportService:TeleportToPlaceInstance(
+                originalPlaceId,
+                originalJobId,
+                LocalPlayer
+            )
+        end)
+
+        if not ok then
+            warn("[Zero X / Reconnect] " .. tostring(err))
+        end
+
+        task.delay(10, function()
+            TryReconnect(attempt + 1, token)
+        end)
+    end
+
+    local connected = pcall(function()
+        -- ตรวจสิทธิ์อ่าน API ก่อนเปิดใช้งาน
+        GuiService:GetErrorCode()
+
+        Connect(GuiService.ErrorMessageChanged, function()
+            if not alive or not state.Reconnect or reconnecting then return end
+
+            local ok, code = pcall(function()
+                return GuiService:GetErrorCode()
+            end)
+
+            if not ok or not code or code.Value ~= 267 then return end
+
+            reconnecting = true
+            reconnectToken = reconnectToken + 1
+            TryReconnect(1, reconnectToken)
+        end)
+    end)
+
+    reconnectAvailable = connected and originalJobId ~= ""
+
+    Connect(LocalPlayer.OnTeleport, function(teleportState)
+        if teleportState == Enum.TeleportState.InProgress then
+            reconnectToken = reconnectToken + 1
+            reconnecting = false
+        end
+    end)
+
+    --------------------------------------------------------------------------
+    -- Controls
+    --------------------------------------------------------------------------
+    local Movement = Tabs.Player:AddSection({
+        Title = "Movement",
+        Icon = "move",
+    })
+
+    local Performance = Tabs.Player:AddSection({
+        Title = "Performance",
+        Icon = "monitor",
+    })
+
+    local FlySection = Tabs.Player:AddSection({
+        Title = "Fly",
+        Icon = "send",
+    })
+
+    local Session = Tabs.Player:AddSection({
+        Title = "Session",
+        Icon = "refresh-cw",
+    })
+
+    local function AddStateToggle(section, index, title, key, changed)
+        return section:AddToggle(index, {
+            Title = title,
+            Default = false,
+            Callback = function(value)
+                if not alive then return end
+                state[key] = value
+                if changed then changed() end
+            end,
+        })
+    end
+
+    AddStateToggle(Movement, "ZeroXWalkSpeed", "WalkSpeed",
+        "WalkSpeed", UpdateMotion)
+
+    Movement:AddSlider("ZeroXSpeed", {
+        Title = "Speed",
+        Min = 0,
+        Max = 200,
+        Default = 32,
+        Increment = 1,
+        Callback = function(value)
+            state.Speed = value
+        end,
+    })
+
+    AddStateToggle(Movement, "ZeroXInfiniteJump", "Infinite Jump",
+        "InfiniteJump")
+
+    AddStateToggle(Movement, "ZeroXNoclip", "Noclip",
+        "Noclip", UpdateMotion)
+
+    AddStateToggle(Movement, "ZeroXInstantPrompt", "Instant ProximityPrompt",
+        "InstantPrompt", ApplyPrompts)
+
+    Performance:AddToggle("ZeroXDisable3D", {
+        Title = "Disable 3D Rendering",
+        Default = false,
+        Callback = function(value)
+            if not alive then return end
+
+            local ok, err = pcall(function()
+                RunService:Set3dRenderingEnabled(not value)
+            end)
+
+            if ok then
+                renderDisabled = value
+            elseif value then
+                Report("สภาพแวดล้อมนี้ปิด 3D Rendering ไม่ได้: " .. tostring(err))
+
+                task.defer(function()
+                    if alive and Options.ZeroXDisable3D then
+                        Options.ZeroXDisable3D:SetValue(false)
+                    end
+                end)
+            end
+        end,
+    })
+
+    AddStateToggle(Performance, "ZeroXFPSBoost", "FPS Boost",
+        "FPSBoost", ApplyPerformance)
+
+    AddStateToggle(Performance, "ZeroXUltraFPSBoost", "Ultra FPS Boost",
+        "UltraFPSBoost", ApplyPerformance)
+
+    AddStateToggle(Performance, "ZeroXDisableAnimations",
+        "Disable Player Animations", "DisableAnimations", UpdateMotion)
+
+    AddStateToggle(FlySection, "ZeroXFly", "Fly",
+        "Fly", UpdateMotion)
+
+    FlySection:AddSlider("ZeroXFlySpeed", {
+        Title = "Fly Speed",
+        Min = 1,
+        Max = 200,
+        Default = 60,
+        Increment = 1,
+        Callback = function(value)
+            state.FlySpeed = value
+        end,
+    })
+
+    FlySection:AddParagraph({
+        Title = "Fly controls",
+        Content = "WASD: เคลื่อนที่ตามกล้อง\nSpace: ขึ้น\nLeft Ctrl: ลง",
+    })
+
+    Session:AddToggle("ZeroXReconnect", {
+        Title = "Auto Reconnect on Kick",
+        Default = false,
+        Callback = function(value)
+            if not alive then return end
+
+            if value and not reconnectAvailable then
+                Report("สภาพแวดล้อมนี้ไม่รองรับตรวจ Kick หรือไม่มี JobId")
+
+                task.defer(function()
+                    if alive and Options.ZeroXReconnect then
+                        Options.ZeroXReconnect:SetValue(false)
+                    end
+                end)
+                return
+            end
+
+            state.Reconnect = value
+
+            if not value then
+                reconnectToken = reconnectToken + 1
+                reconnecting = false
+            end
+        end,
+    })
+
+    Session:AddToggle("ZeroXHideOnStart", {
+        Title = "Hide UI On Start",
+        Description = "มีผลครั้งถัดไปหลังบันทึกและตั้ง Autoload ใน Profiles",
+        Default = false,
+    })
+
+    --------------------------------------------------------------------------
+    -- Cleanup
+    --------------------------------------------------------------------------
+    MacUI:OnUnload(function()
+        alive = false
+        performanceVersion = performanceVersion + 1
+        reconnectToken = reconnectToken + 1
+
+        if motionConnection then
+            motionConnection:Disconnect()
+            motionConnection = nil
+        end
+
+        for _, connection in ipairs(connections) do
+            connection:Disconnect()
+        end
+        table.clear(connections)
+
+        StopFlight()
+        ClearAnimations()
+        Restore(speedSaved)
+        Restore(collisionSaved)
+        Restore(promptSaved)
+        Restore(performanceSaved)
+
+        if renderDisabled then
+            pcall(function()
+                RunService:Set3dRenderingEnabled(true)
+            end)
+        end
+    end)
+end
+
+-- Keep the original settings folders and custom theme loading.
+--------------------------------------------------------------------------------
+-- ZERO X: local overhead name (verified OverHead hierarchy)
+-- Changes only the LocalPlayer's existing name labels on this client.
+--------------------------------------------------------------------------------
+do
+    local TARGET_NAME = "ZERO X SCRIPTHUB"
+    local alive = true
+    local queued = false
+    local character
+    local playerConnections = {}
+    local characterConnections = {}
+    local labels = {}
+
+    local function DisconnectAll(list)
+        for _, connection in ipairs(list) do
+            connection:Disconnect()
+        end
+        table.clear(list)
+    end
+
+    local function EscapeRichText(value)
+        return (value:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;"))
+    end
+
+    local function NameTexts()
+        local tag = LocalPlayer:GetAttribute("GuildTag")
+        if type(tag) ~= "string" or tag == "" then
+            return TARGET_NAME, EscapeRichText(TARGET_NAME)
+        end
+
+        local color = LocalPlayer:GetAttribute("GuildColor")
+        local hex = typeof(color) == "Color3" and color:ToHex() or "8D89ED"
+        return "[" .. tag .. "] " .. TARGET_NAME,
+            '<font color="#' .. hex .. '">[' .. EscapeRichText(tag)
+                .. ']</font> ' .. EscapeRichText(TARGET_NAME)
+    end
+
+    local function ReleaseLabel(label, record)
+        record.Connection:Disconnect()
+        pcall(function()
+            if label.Text == record.Expected then
+                label.Text = record.Original
+            end
+        end)
+        labels[label] = nil
+    end
+
+    local function ClearLabels()
+        for label, record in pairs(labels) do
+            ReleaseLabel(label, record)
+        end
+    end
+
+    local Refresh
+    local function ScheduleRefresh()
+        if not alive or queued then return end
+        queued = true
+        task.defer(function()
+            queued = false
+            if alive then Refresh() end
+        end)
+    end
+
+    Refresh = function()
+        local overhead = character and character:FindFirstChild("OverHead")
+        if overhead and not overhead:IsA("BillboardGui") then overhead = nil end
+        local main = overhead and overhead:FindFirstChild("Main")
+        local display = main and main:FindFirstChild("DisplayName")
+        local shadow = display and display:FindFirstChild("TxtShadow")
+        local front = shadow and shadow:FindFirstChild("Txt")
+        local plainText, richText = NameTexts()
+        local wanted = {}
+
+        if shadow and shadow:IsA("TextLabel") then
+            wanted[shadow] = plainText
+        end
+        if front and front:IsA("TextLabel") then
+            wanted[front] = front.RichText and richText or plainText
+        end
+
+        for label, record in pairs(labels) do
+            if wanted[label] == nil then ReleaseLabel(label, record) end
+        end
+
+        for label, text in pairs(wanted) do
+            local record = labels[label]
+            if not record then
+                record = { Original = label.Text }
+                labels[label] = record
+                record.Connection = label:GetPropertyChangedSignal("Text"):Connect(function()
+                    if not alive or labels[label] ~= record then return end
+                    if label.Text ~= record.Expected then
+                        record.Original = label.Text
+                        ScheduleRefresh()
+                    end
+                end)
+            elseif label.Text ~= record.Expected then
+                record.Original = label.Text
+            end
+
+            record.Expected = text
+            if label.Text ~= text then label.Text = text end
+        end
+    end
+
+    local function BindCharacter(nextCharacter)
+        DisconnectAll(characterConnections)
+        ClearLabels()
+        character = nextCharacter
+        if character then
+            table.insert(characterConnections,
+                character.DescendantAdded:Connect(ScheduleRefresh))
+            table.insert(characterConnections,
+                character.DescendantRemoving:Connect(ScheduleRefresh))
+        end
+        ScheduleRefresh()
+    end
+
+    table.insert(playerConnections, LocalPlayer.CharacterAdded:Connect(BindCharacter))
+    table.insert(playerConnections, LocalPlayer.CharacterRemoving:Connect(function(oldCharacter)
+        if character == oldCharacter then BindCharacter(nil) end
+    end))
+    table.insert(playerConnections,
+        LocalPlayer:GetAttributeChangedSignal("GuildTag"):Connect(ScheduleRefresh))
+    table.insert(playerConnections,
+        LocalPlayer:GetAttributeChangedSignal("GuildColor"):Connect(ScheduleRefresh))
+
+    MacUI:OnUnload(function()
+        alive = false
+        DisconnectAll(playerConnections)
+        DisconnectAll(characterConnections)
+        ClearLabels()
+        character = nil
+    end)
+
+    BindCharacter(LocalPlayer.Character)
+end
+
+ThemeManager:SetLibrary(MacUI)
+ThemeManager:SetFolder("ZeroX")
+ThemeManager:LoadCustomThemes()
+
+InterfaceManager:SetLibrary(MacUI)
+InterfaceManager:SetFolder("ZeroX")
+InterfaceManager:BuildInterfaceSection(Tabs.Appearance)
+
+-- Profiles: saved separately for each PlaceId, as in the supplied file.
+SaveManager:SetLibrary(MacUI)
+SaveManager:SetFolder("ZeroX/" .. tostring(game.PlaceId))
+SaveManager:IgnoreThemeSettings()
+SaveManager:BuildConfigSection(Tabs.Profiles)
+
+--------------------------------------------------------------------------------
+-- PROFILES: Auto Execute after teleport / rejoin
+--------------------------------------------------------------------------------
+do
+    local LOADER_URL = "https://raw.githubusercontent.com/MomoHub007/ZeroX-Best-Script/refs/heads/main/loader.lua"
+
+    local env = type(getgenv) == "function" and getgenv() or _G
+    local queueFn = env.queue_on_teleport or env.queueonteleport
+    local flagFile = "ZeroX/AutoExecute/" .. tostring(game.GameId) .. ".txt"
+    local runtimeKey = "__ZEROX_AUTO_EXECUTE_V1"
+    local runtime = env[runtimeKey]
+
+    if type(runtime) ~= "table" then
+        runtime = {}
+        env[runtimeKey] = runtime
+    end
+
+    -- ป้องกัน Connection ซ้ำเมื่อรัน UI ใหม่ใน Client เดิม
+    if runtime.Connection then
+        runtime.Connection:Disconnect()
+        runtime.Connection = nil
+    end
+
+    local owner = {}
+    runtime.Owner = owner
+    runtime.Enabled = false
+    local active = true
+
+    local section = Tabs.Profiles:AddSection({
+        Title = "Auto Execute",
+        Icon = "play",
+    })
+
+    local status = section:AddLabel({
+        Title = "Status",
+        Value = "Disabled",
+    })
+
+    local function OwnsRuntime()
+        return active and runtime.Owner == owner
+    end
+
+    local function SetStatus(message, isError)
+        if not OwnsRuntime() then return end
+
+        status:SetValue(message)
+
+        if isError then
+            Window:Toast("Auto Execute", {
+                Detail = tostring(message),
+            })
+        end
+    end
+
+    -- ไฟล์สถานะเฉพาะระบบนี้ ใช้ยกเลิก payload โดยไม่ล้างคิวส่วนกลาง
+    local function WriteFlag(enabled)
+        if type(env.makefolder) ~= "function"
+            or type(env.isfile) ~= "function"
+            or type(env.readfile) ~= "function"
+            or type(env.writefile) ~= "function"
+            or type(env.isfolder) ~= "function" then
+            return false, "Executor filesystem APIs unavailable"
+        end
+
+        return pcall(function()
+            for _, folder in ipairs({
+                "ZeroX",
+                "ZeroX/AutoExecute",
+            }) do
+                if not env.isfolder(folder) then
+                    env.makefolder(folder)
+                end
+            end
+
+            local value = enabled and "1" or "0"
+            env.writefile(flagFile, value)
+
+            assert(
+                env.readfile(flagFile) == value,
+                "Auto Execute setting verification failed"
+            )
+        end)
+    end
+
+    local initialEnabled = false
+
+    if type(env.isfile) == "function"
+        and type(env.readfile) == "function" then
+        local ok, value = pcall(function()
+            return env.isfile(flagFile)
+                and env.readfile(flagFile) == "1"
+        end)
+
+        initialEnabled = ok and value == true
+    end
+
+    local payload = string.format([=[
+local env = type(getgenv) == "function" and getgenv() or _G
+
+local ok, enabled = pcall(function()
+    return type(env.isfile) == "function"
+        and type(env.readfile) == "function"
+        and env.isfile(%q)
+        and env.readfile(%q) == "1"
+end)
+
+if not ok or not enabled then return end
+
+if not game:IsLoaded() then
+    game.Loaded:Wait()
+end
+
+-- ใช้ guard เดิมที่ตรวจพบใน loader.lua ร่วมกับ guard ระหว่างดาวน์โหลด
+if env.__ZEROX_MULTI_GAME_LOADER
+    or env.__ZEROX_AUTO_EXECUTE_LOADING then
+    return
+end
+
+env.__ZEROX_AUTO_EXECUTE_LOADING = true
+
+local ran, err = pcall(function()
+    -- ตรวจอีกครั้ง เผื่อปิด Auto Execute ระหว่างรอเกมโหลด
+    if env.readfile(%q) ~= "1" then return end
+
+    local source = game:HttpGet(%q)
+
+    assert(
+        type(source) == "string" and source:match("%%S"),
+        "Loader response is empty"
+    )
+
+    local chunk, compileError = loadstring(source, "ZeroXAutoExecute")
+    assert(chunk, compileError)
+
+    chunk()
+end)
+
+env.__ZEROX_AUTO_EXECUTE_LOADING = nil
+
+if not ran then
+    warn("[Zero X / Auto Execute] " .. tostring(err))
+end
+]=], flagFile, flagFile, flagFile, LOADER_URL)
+
+    local function QueueLoader()
+        if not OwnsRuntime() or not runtime.Enabled then return end
+
+        if runtime.Queued then
+            SetStatus("Loader already queued")
+            return
+        end
+
+        if type(queueFn) ~= "function" then
+            SetStatus("Teleport queue API unavailable", true)
+            return
+        end
+
+        local queued, queueError = pcall(queueFn, payload)
+
+        if queued then
+            runtime.Queued = true
+            SetStatus("Loader queued - ready for teleport")
+        else
+            SetStatus("Queue failed: " .. tostring(queueError), true)
+        end
+    end
+
+    local function ApplyEnabled(enabled)
+        if not OwnsRuntime() then return end
+
+        runtime.Enabled = enabled
+
+        local ok, err = WriteFlag(enabled)
+
+        if not ok then
+            SetStatus("Setting write failed: " .. tostring(err), true)
+            return
+        end
+
+        if enabled then
+            QueueLoader()
+        else
+            SetStatus("Disabled")
+        end
+    end
+
+    local toggle = section:AddToggle("ZeroXAutoExecute", {
+        Title = "Auto Execute",
+        Description = "เปิดใช้งานระบบ Auto Execute ออโต้",
+        Default = initialEnabled,
+        Callback = ApplyEnabled,
+    })
+
+    ApplyEnabled(toggle.Value)
+
+    runtime.Connection = LocalPlayer.OnTeleport:Connect(function(teleportState)
+        if not OwnsRuntime() or not runtime.Enabled then return end
+        if teleportState ~= Enum.TeleportState.Started then return end
+
+        local saved, saveError = WriteFlag(true)
+
+        if not saved then
+            SetStatus("Cannot queue: " .. tostring(saveError), true)
+            return
+        end
+
+        QueueLoader()
+    end)
+
+    MacUI:OnUnload(function()
+        if runtime.Owner ~= owner then return end
+
+        active = false
+        runtime.Enabled = false
+
+        if runtime.Connection then
+            runtime.Connection:Disconnect()
+            runtime.Connection = nil
+        end
+
+        local ok, err = WriteFlag(false)
+
+        if not ok then
+            Window:Toast("Auto Execute", {
+                Detail = "Could not cancel queued loader: " .. tostring(err),
+            })
+        end
+    end)
+end
+
+-- Keep this call after all controls are created.
+SaveManager:LoadAutoloadConfig()
+
+if Options.ZeroXHideOnStart and Options.ZeroXHideOnStart.Value then
+    Window:Minimize()
+end
